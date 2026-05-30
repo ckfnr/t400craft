@@ -1,0 +1,4 @@
+These are the required packages. 
+CAUTION: Gentoo-Linux specific names.
+
+media-libs/glew
