@@ -62,7 +62,7 @@ int main(void) {
     Mesh chunk_mesh = chunk_build_mesh(&chunk);
 
     int widthImg, heightImg, numColCh;
-    unsigned char* bytes = stbi_load("src/textures/dirtblock.jpg", &widthImg, &heightImg, &numColCh, 4);
+    unsigned char* bytes = stbi_load("src/textures/dirtblock.png", &widthImg, &heightImg, &numColCh, 4); //texture
 
     GLuint texture;
     glGenTextures(1, &texture);

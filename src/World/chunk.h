@@ -9,7 +9,7 @@
 
 typedef struct {
     Block blocks[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
-    int x, z;  // chunk position in der welt
+    int x, z;  // chunk position in world
 } Chunk;
 
 void chunk_init(Chunk* chunk, int x, int z);
