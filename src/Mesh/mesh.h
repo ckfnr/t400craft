@@ -5,6 +5,7 @@
 
 typedef struct {
     GLuint VAO, VBO, EBO;
+    int index_count;
 } Mesh;
 
 Mesh mesh_create(GLfloat* vertices, GLsizeiptr vert_size,

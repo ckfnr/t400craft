@@ -11,7 +11,8 @@ Mesh mesh_create(GLfloat* vertices, GLsizeiptr vert_size,
     glBufferData(GL_ARRAY_BUFFER, vert_size, vertices, GL_STATIC_DRAW);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m.EBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, ind_size, indices, GL_STATIC_DRAW);
-
+    m.index_count = ind_size / sizeof(GLuint);
+    
     // position (location 0)
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
@@ -32,7 +33,7 @@ Mesh mesh_create(GLfloat* vertices, GLsizeiptr vert_size,
 
 void mesh_draw(Mesh* mesh) {
     glBindVertexArray(mesh->VAO);
-    glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
+    glDrawElements(GL_TRIANGLES, mesh->index_count, GL_UNSIGNED_INT, 0);
 }
 
 void mesh_delete(Mesh* mesh) {
