@@ -26,7 +26,7 @@ int main(void) {
         "t400craft",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         width, height,
-        SDL_WINDOW_OPENGL
+        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
     );
 
     SDL_GLContext ctx = SDL_GL_CreateContext(window);
@@ -87,6 +87,13 @@ int main(void) {
     while (running) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) running = 0;
+            if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
+                int w, h;
+                SDL_GL_GetDrawableSize(window, &w, &h);
+                glViewport(0, 0, w, h);
+                cam.width = w;
+                cam.height = h;
+            }
         }
 
         glClearColor(0.4f, 0.7f, 1.0f, 1.0f);
