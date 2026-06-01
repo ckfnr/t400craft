@@ -9,6 +9,7 @@ typedef struct {
     vec3 position;
     vec3 orientation;
     vec3 up;
+    vec3 move_forward;
     int first_click;
     int width;
     int height;
