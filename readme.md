@@ -16,7 +16,7 @@ Required:
 
 - GLEW
 
-You will also need a C compiler and any libraries used by the project (such as SDL2).
+You will also need a C compiler.
 
 ## Compiling and Running
 
