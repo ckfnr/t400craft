@@ -13,6 +13,8 @@ static int block_face_texture_layer(BlockType type, int face) {
             if (face == 0) return 2;
             if (face == 1) return 0;
             return 1;
+        case BLOCK_COBBLESTONE:
+            return 3;
         case BLOCK_AIR:
         default:
             return 0;

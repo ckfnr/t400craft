@@ -29,13 +29,17 @@ void camera_export(Camera* cam, GLuint shader, const char* uniform) {
     glUniformMatrix4fv(glGetUniformLocation(shader, uniform), 1, GL_FALSE, (float*)cam->camera_matrix);
 }
 
-void camera_inputs(Camera* cam, const Uint8* keys, int mouse_dx, int mouse_dy, int mouse_held, vec3 movement) {
+void camera_inputs(Camera* cam, const Uint8* keys, int mouse_dx, int mouse_dy, int mouse_held, int gravity_enabled, vec3 movement) {
     vec3 tmp;
     vec3 world_up = {0.0f, 1.0f, 0.0f};
     (void)mouse_held;
 
     glm_vec3_zero(movement);
-    cam->speed = keys[SDL_SCANCODE_LCTRL] ? 0.4f : 0.1f;
+    if (gravity_enabled) {
+    cam->speed = keys[SDL_SCANCODE_LCTRL] ? 0.13f : 0.08f;
+    } else {
+        cam->speed = keys[SDL_SCANCODE_LCTRL] ? 0.4f : 0.1f;
+    }
 
     if (!cam->first_click) {
         float rotX = cam->sensitivity * (float)mouse_dy / cam->height;
@@ -82,12 +86,14 @@ void camera_inputs(Camera* cam, const Uint8* keys, int mouse_dx, int mouse_dy, i
         glm_vec3_scale(tmp, cam->speed, tmp);
         glm_vec3_add(movement, tmp, movement);
     }
-    if (keys[SDL_SCANCODE_SPACE]) {
-        glm_vec3_scale(world_up, cam->speed, tmp);
-        glm_vec3_add(movement, tmp, movement);
-    }
-    if (keys[SDL_SCANCODE_LSHIFT]) {
-        glm_vec3_scale(world_up, -cam->speed, tmp);
-        glm_vec3_add(movement, tmp, movement);
+    if (!gravity_enabled) {
+        if (keys[SDL_SCANCODE_SPACE]) {
+            glm_vec3_scale(world_up, cam->speed, tmp);
+            glm_vec3_add(movement, tmp, movement);
+        }
+        if (keys[SDL_SCANCODE_LSHIFT]) {
+            glm_vec3_scale(world_up, -cam->speed, tmp);
+            glm_vec3_add(movement, tmp, movement);
+        }
     }
 }

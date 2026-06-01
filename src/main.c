@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <SDL2/SDL.h>
 #include <GL/glew.h>
+#include <float.h>
 #include <math.h>
 #include "Shaders/shader_loader.h"
 #include "Mesh/mesh.h"
@@ -98,8 +99,10 @@ static const unsigned char* glyph_rows(char c) {
     static const unsigned char n_glyph[7] = {17, 25, 21, 19, 17, 17, 17};
     static const unsigned char o_glyph[7] = {14, 17, 17, 17, 17, 17, 14};
     static const unsigned char p_glyph[7] = {30, 17, 17, 30, 16, 16, 16};
+    static const unsigned char r_glyph[7] = {30, 17, 17, 30, 20, 18, 17};
     static const unsigned char t_glyph[7] = {31, 4, 4, 4, 4, 4, 4};
     static const unsigned char u_glyph[7] = {17, 17, 17, 17, 17, 17, 14};
+    static const unsigned char v_glyph[7] = {17, 17, 17, 17, 17, 10, 4};
     static const unsigned char y_glyph[7] = {17, 17, 17, 14, 4, 4, 4};
     static const unsigned char a_glyph[7] = {14, 17, 17, 31, 17, 17, 17};
 
@@ -113,8 +116,10 @@ static const unsigned char* glyph_rows(char c) {
         case 'n': return n_glyph;
         case 'o': return o_glyph;
         case 'p': return p_glyph;
+        case 'r': return r_glyph;
         case 't': return t_glyph;
         case 'u': return u_glyph;
+        case 'v': return v_glyph;
         case 'y': return y_glyph;
         default: return blank;
     }
@@ -151,16 +156,143 @@ static int block_is_solid(BlockType type) {
     return type != BLOCK_AIR;
 }
 
+typedef struct {
+    int hit;
+    int block_x;
+    int block_y;
+    int block_z;
+    int place_x;
+    int place_y;
+    int place_z;
+} BlockSelection;
+
+static void rebuild_chunk_mesh(Chunk* chunk, Mesh* chunk_mesh) {
+    mesh_delete(chunk_mesh);
+    *chunk_mesh = chunk_build_mesh(chunk);
+}
+
+static int set_block_type(Chunk* chunk, int x, int y, int z, BlockType type) {
+    Block* block = chunk_get_block(chunk, x, y, z);
+    if (block == NULL) {
+        return 0;
+    }
+
+    block->type = type;
+    return 1;
+}
+
+static int raycast_block_selection(Chunk* chunk, vec3 origin, vec3 direction, float max_distance, BlockSelection* selection) {
+    vec3 ray_direction;
+    glm_vec3_copy(direction, ray_direction);
+    if (glm_vec3_norm(ray_direction) < 0.0001f) {
+        return 0;
+    }
+    glm_vec3_normalize(ray_direction);
+
+    int map_x = (int)floorf(origin[0]);
+    int map_y = (int)floorf(origin[1]);
+    int map_z = (int)floorf(origin[2]);
+
+    int step_x = ray_direction[0] > 0.0f ? 1 : (ray_direction[0] < 0.0f ? -1 : 0);
+    int step_y = ray_direction[1] > 0.0f ? 1 : (ray_direction[1] < 0.0f ? -1 : 0);
+    int step_z = ray_direction[2] > 0.0f ? 1 : (ray_direction[2] < 0.0f ? -1 : 0);
+
+    float t_max_x = FLT_MAX;
+    float t_max_y = FLT_MAX;
+    float t_max_z = FLT_MAX;
+    float t_delta_x = FLT_MAX;
+    float t_delta_y = FLT_MAX;
+    float t_delta_z = FLT_MAX;
+
+    if (step_x != 0) {
+        float next_x = step_x > 0 ? (float)(map_x + 1) : (float)map_x;
+        t_max_x = (next_x - origin[0]) / ray_direction[0];
+        t_delta_x = 1.0f / fabsf(ray_direction[0]);
+    }
+    if (step_y != 0) {
+        float next_y = step_y > 0 ? (float)(map_y + 1) : (float)map_y;
+        t_max_y = (next_y - origin[1]) / ray_direction[1];
+        t_delta_y = 1.0f / fabsf(ray_direction[1]);
+    }
+    if (step_z != 0) {
+        float next_z = step_z > 0 ? (float)(map_z + 1) : (float)map_z;
+        t_max_z = (next_z - origin[2]) / ray_direction[2];
+        t_delta_z = 1.0f / fabsf(ray_direction[2]);
+    }
+
+    selection->hit = 0;
+    selection->place_x = map_x;
+    selection->place_y = map_y;
+    selection->place_z = map_z;
+
+    float travelled = 0.0f;
+    while (travelled <= max_distance) {
+        if (map_x >= 0 && map_x < CHUNK_SIZE_X &&
+            map_y >= 0 && map_y < CHUNK_SIZE_Y &&
+            map_z >= 0 && map_z < CHUNK_SIZE_Z) {
+            Block* block = chunk_get_block(chunk, map_x, map_y, map_z);
+            if (block != NULL && block_is_solid(block->type)) {
+                selection->hit = 1;
+                selection->block_x = map_x;
+                selection->block_y = map_y;
+                selection->block_z = map_z;
+                return 1;
+            }
+        }
+
+        if (t_max_x < t_max_y) {
+            if (t_max_x < t_max_z) {
+                travelled = t_max_x;
+                if (travelled > max_distance) break;
+                map_x += step_x;
+                t_max_x += t_delta_x;
+                selection->place_x = map_x - step_x;
+                selection->place_y = map_y;
+                selection->place_z = map_z;
+            } else {
+                travelled = t_max_z;
+                if (travelled > max_distance) break;
+                map_z += step_z;
+                t_max_z += t_delta_z;
+                selection->place_x = map_x;
+                selection->place_y = map_y;
+                selection->place_z = map_z - step_z;
+            }
+        } else {
+            if (t_max_y < t_max_z) {
+                travelled = t_max_y;
+                if (travelled > max_distance) break;
+                map_y += step_y;
+                t_max_y += t_delta_y;
+                selection->place_x = map_x;
+                selection->place_y = map_y - step_y;
+                selection->place_z = map_z;
+            } else {
+                travelled = t_max_z;
+                if (travelled > max_distance) break;
+                map_z += step_z;
+                t_max_z += t_delta_z;
+                selection->place_x = map_x;
+                selection->place_y = map_y;
+                selection->place_z = map_z - step_z;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static int player_collides_at(Chunk* chunk, vec3 position) {
     const float half_width = 0.3f;
-    const float height = 2.0f;
+    const float height = 1.7f;
 
-    float min_x = position[0] - half_width;
-    float max_x = position[0] + half_width;
-    float min_y = position[1] - height;
-    float max_y = position[1];
-    float min_z = position[2] - half_width;
-    float max_z = position[2] + half_width;
+
+    float min_x = position[0] - half_width + 0.001f;
+    float max_x = position[0] + half_width - 0.001f;
+    float min_y = position[1] - height    + 0.001f;
+    float max_y = position[1] + 0.1f;
+    float min_z = position[2] - half_width + 0.001f;
+    float max_z = position[2] + half_width - 0.001f;
 
     int start_x = (int)floorf(min_x);
     int end_x = (int)floorf(max_x);
@@ -194,6 +326,13 @@ static int player_collides_at(Chunk* chunk, vec3 position) {
     return 0;
 }
 
+static int player_grounded_at(Chunk* chunk, vec3 position) {
+    vec3 probe;
+    glm_vec3_copy(position, probe);
+    probe[1] -= 0.05f;
+    return player_collides_at(chunk, probe);
+}
+
 static void move_camera_with_collision(Camera* cam, Chunk* chunk, vec3 movement) {
     vec3 next_position;
 
@@ -212,6 +351,26 @@ static void move_camera_with_collision(Camera* cam, Chunk* chunk, vec3 movement)
     if (!player_collides_at(chunk, next_position))
         cam->position[2] = next_position[2];
 }
+
+static const GLfloat selection_outline_vertices[] = {
+    -0.01f, -0.01f, -0.01f,
+     1.01f, -0.01f, -0.01f,
+     1.01f,  1.01f, -0.01f,
+    -0.01f,  1.01f, -0.01f,
+    -0.01f, -0.01f,  1.01f,
+     1.01f, -0.01f,  1.01f,
+     1.01f,  1.01f,  1.01f,
+    -0.01f,  1.01f,  1.01f,
+};
+
+static const GLuint selection_outline_indices[] = {
+    0, 1, 2, 0, 2, 3,
+    4, 5, 6, 4, 6, 7,
+    0, 4, 7, 0, 7, 3,
+    1, 5, 6, 1, 6, 2,
+    0, 1, 5, 0, 5, 4,
+    3, 2, 6, 3, 6, 7,
+};
 
 int main(void) {
     SDL_Init(SDL_INIT_VIDEO);
@@ -312,6 +471,41 @@ int main(void) {
         "}\n";
 
     GLuint buttonProgram = create_program_from_sources(button_vert, button_frag);
+
+    const char* selection_vert =
+        "#version 330 core\n"
+        "layout (location = 0) in vec3 aPos;\n"
+        "uniform mat4 camMatrix;\n"
+        "uniform mat4 model;\n"
+        "void main()\n"
+        "{\n"
+        "   gl_Position = camMatrix * model * vec4(aPos, 1.0);\n"
+        "}\n";
+
+    const char* selection_frag =
+        "#version 330 core\n"
+        "out vec4 FragColor;\n"
+        "uniform vec4 outlineColor;\n"
+        "void main()\n"
+        "{\n"
+        "   FragColor = outlineColor;\n"
+        "}\n";
+
+    GLuint selectionProgram = create_program_from_sources(selection_vert, selection_frag);
+    GLuint selectionVAO, selectionVBO, selectionEBO;
+    glGenVertexArrays(1, &selectionVAO);
+    glGenBuffers(1, &selectionVBO);
+    glGenBuffers(1, &selectionEBO);
+    glBindVertexArray(selectionVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, selectionVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(selection_outline_vertices), selection_outline_vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, selectionEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(selection_outline_indices), selection_outline_indices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     GLuint buttonVAO, buttonVBO;
     glGenVertexArrays(1, &buttonVAO);
     glGenBuffers(1, &buttonVBO);
@@ -333,8 +527,9 @@ int main(void) {
         "src/textures/dirtblock.png",
         "src/textures/grass_side.png",
         "src/textures/grass_top.png",
+        "src/textures/cobblestone.png",
     };
-    GLuint texture = load_texture_array(world_textures, 3);
+    GLuint texture = load_texture_array(world_textures, 4);
 
     int buttonWidthImg, buttonHeightImg, buttonNumColCh;
     unsigned char* buttonBytes = stbi_load("src/UI/button.png", &buttonWidthImg, &buttonHeightImg, &buttonNumColCh, 4);
@@ -368,14 +563,22 @@ int main(void) {
     glBindTexture(GL_TEXTURE_2D, 0);
 
     Camera cam;
-    vec3 start_pos = {0.0f, 5.0f, 10.0f};
+    vec3 start_pos = {0.0f, 4.0f, 10.0f};
     camera_init(&cam, width, height, start_pos);
 
     int running = 1;
     int paused = 0;
     SDL_Event event;
+    int gravity_enabled = 0;
+    float vertical_velocity = 0.0f;
+    const float gravity_acceleration = 0.018f;
+    const float jump_velocity = 0.22f;
+    const float gravity_floor_y = -4.0f;
 
     while (running) {
+        int break_requested = 0;
+        int place_requested = 0;
+
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) running = 0;
             if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_ESCAPE) {
@@ -388,10 +591,10 @@ int main(void) {
                     SDL_ShowCursor(SDL_DISABLE);
                     cam.first_click = 1;
                 }
-            }
-            if (paused && event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
+            } else if (paused && event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
                 int button_x = 0;
                 int button_y = 0;
+                int gravity_button_y = 0;
                 int screen_w = 0;
                 int screen_h = 0;
                 SDL_GL_GetDrawableSize(window, &screen_w, &screen_h);
@@ -399,12 +602,24 @@ int main(void) {
                 float button_height = 64.0f;
                 button_x = (screen_w - (int)button_width) / 2;
                 button_y = (screen_h - (int)button_height) / 2;
+                gravity_button_y = button_y + 84;
 
                 if (point_in_rect(event.button.x, event.button.y, (float)button_x, (float)button_y, button_width, button_height)) {
                     paused = 0;
                     SDL_SetRelativeMouseMode(SDL_TRUE);
                     SDL_ShowCursor(SDL_DISABLE);
                     cam.first_click = 1;
+                } else if (point_in_rect(event.button.x, event.button.y, (float)button_x, (float)gravity_button_y, button_width, button_height)) {
+                    gravity_enabled = !gravity_enabled;
+                    if (!gravity_enabled) {
+                        vertical_velocity = 0.0f;
+                    }
+                }
+            } else if (!paused && event.type == SDL_MOUSEBUTTONDOWN) {
+                if (event.button.button == SDL_BUTTON_LEFT) {
+                    break_requested = 1;
+                } else if (event.button.button == SDL_BUTTON_RIGHT) {
+                    place_requested = 1;
                 }
             }
             if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
@@ -432,8 +647,65 @@ int main(void) {
             SDL_GetRelativeMouseState(&mouse_dx, &mouse_dy);
             const Uint8* keys = SDL_GetKeyboardState(NULL);
             vec3 movement;
-            camera_inputs(&cam, keys, mouse_dx, mouse_dy, 0, movement);
-            move_camera_with_collision(&cam, &chunk, movement);
+            camera_inputs(&cam, keys, mouse_dx, mouse_dy, 0, gravity_enabled, movement);
+
+            if (gravity_enabled) {
+                int grounded = player_grounded_at(&chunk, cam.position);
+
+                if (grounded && vertical_velocity < 0.0f) {
+                    vertical_velocity = 0.0f;
+                }
+
+                if (grounded && keys[SDL_SCANCODE_SPACE]) {
+                    vertical_velocity = jump_velocity;
+                }
+
+                move_camera_with_collision(&cam, &chunk, movement);
+
+                vertical_velocity -= gravity_acceleration;
+
+                vec3 next_position;
+                glm_vec3_copy(cam.position, next_position);
+                next_position[1] += vertical_velocity;
+
+                if (!player_collides_at(&chunk, next_position)) {
+                    cam.position[1] = next_position[1];
+                } else {
+                    vertical_velocity = 0.0f;
+                }
+
+                if (cam.position[1] < gravity_floor_y) {
+                    cam.position[1] = gravity_floor_y;
+                    vertical_velocity = 0.0f;
+                }
+            } else {
+                move_camera_with_collision(&cam, &chunk, movement);
+            }
+
+            BlockSelection selected_block = {0};
+            raycast_block_selection(&chunk, cam.position, cam.orientation, 6.0f, &selected_block);
+
+            if (break_requested && selected_block.hit) {
+                if (set_block_type(&chunk, selected_block.block_x, selected_block.block_y, selected_block.block_z, BLOCK_AIR)) {
+                    rebuild_chunk_mesh(&chunk, &chunk_mesh);
+                    selected_block.hit = 0;
+                    raycast_block_selection(&chunk, cam.position, cam.orientation, 6.0f, &selected_block);
+                }
+            }
+
+            if (place_requested && selected_block.hit) {
+                Block* place_block = chunk_get_block(&chunk, selected_block.place_x, selected_block.place_y, selected_block.place_z);
+                if (place_block != NULL && place_block->type == BLOCK_AIR) {
+                    place_block->type = BLOCK_COBBLESTONE;
+                    if (!player_collides_at(&chunk, cam.position)) {
+                        rebuild_chunk_mesh(&chunk, &chunk_mesh);
+                        selected_block.hit = 0;
+                        raycast_block_selection(&chunk, cam.position, cam.orientation, 6.0f, &selected_block);
+                    } else {
+                        place_block->type = BLOCK_AIR;
+                    }
+                }
+            }
 
             camera_update(&cam, 45.0f, 0.1f, 100.0f);
             camera_export(&cam, shaderProgram, "camMatrix");
@@ -445,6 +717,29 @@ int main(void) {
             glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
             glUniform1i(glGetUniformLocation(shaderProgram, "tex0"), 0);
             mesh_draw(&chunk_mesh);
+
+            if (selected_block.hit) {
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glDisable(GL_CULL_FACE);
+                glUseProgram(selectionProgram);
+                glBindVertexArray(selectionVAO);
+
+                mat4 selection_model;
+                glm_mat4_identity(selection_model);
+                vec3 selection_position = {(float)selected_block.block_x, (float)selected_block.block_y, (float)selected_block.block_z};
+                glm_translate(selection_model, selection_position);
+
+                glUniformMatrix4fv(glGetUniformLocation(selectionProgram, "camMatrix"), 1, GL_FALSE, (float*)cam.camera_matrix);
+                glUniformMatrix4fv(glGetUniformLocation(selectionProgram, "model"), 1, GL_FALSE, (float*)selection_model);
+                glUniform4f(glGetUniformLocation(selectionProgram, "outlineColor"), 0.55f, 0.55f, 0.55f, 0.35f);
+                glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
+
+                glBindVertexArray(0);
+                glEnable(GL_CULL_FACE);
+                glDisable(GL_BLEND);
+                glUseProgram(shaderProgram);
+            }
 
             glDisable(GL_DEPTH_TEST);
             glDisable(GL_CULL_FACE);
@@ -518,6 +813,7 @@ int main(void) {
             float button_height = 64.0f;
             float button_x = ((float)screen_w - button_width) * 0.5f;
             float button_y = ((float)screen_h - button_height) * 0.5f;
+            float gravity_button_y = button_y + 84.0f;
 
             float button_vertices[24] = {
                 button_x, button_y, 0.0f, 0.0f,
@@ -536,6 +832,19 @@ int main(void) {
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, buttonTexture);
             glUniform1i(glGetUniformLocation(buttonProgram, "buttonTex"), 1);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            float gravity_button_vertices[24] = {
+                button_x, gravity_button_y, 0.0f, 0.0f,
+                button_x + button_width, gravity_button_y, 1.0f, 0.0f,
+                button_x + button_width, gravity_button_y + button_height, 1.0f, 1.0f,
+
+                button_x, gravity_button_y, 0.0f, 0.0f,
+                button_x + button_width, gravity_button_y + button_height, 1.0f, 1.0f,
+                button_x, gravity_button_y + button_height, 0.0f, 1.0f,
+            };
+            glBindBuffer(GL_ARRAY_BUFFER, buttonVBO);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(gravity_button_vertices), gravity_button_vertices);
             glDrawArrays(GL_TRIANGLES, 0, 6);
 
             glUseProgram(uiProgram);
@@ -561,6 +870,23 @@ int main(void) {
             glUniform4f(glGetUniformLocation(uiProgram, "uColor"), 0.15f, 0.15f, 0.15f, 1.0f);
             glDrawArrays(GL_TRIANGLES, 0, text_count / 2);
 
+            text_count = 0;
+            const char* gravity_label = gravity_enabled ? "gravity on" : "toggle gravity";
+            text_width = 0.0f;
+            for (const char* ch = gravity_label; *ch != '\0'; ++ch) {
+                if (*ch == ' ') {
+                    text_width += 4.0f * text_scale;
+                } else {
+                    text_width += 6.0f * text_scale;
+                }
+            }
+            text_x = button_x + (button_width - text_width) * 0.5f;
+            text_y = gravity_button_y + (button_height - 7.0f * text_scale) * 0.5f;
+            build_text_vertices(gravity_label, text_x, text_y, text_scale, text_vertices, &text_count);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * text_count, text_vertices);
+            glUniform4f(glGetUniformLocation(uiProgram, "uColor"), 0.15f, 0.15f, 0.15f, 1.0f);
+            glDrawArrays(GL_TRIANGLES, 0, text_count / 2);
+
             glBindBuffer(GL_ARRAY_BUFFER, 0);
             glBindVertexArray(0);
             glDisable(GL_BLEND);
@@ -577,10 +903,14 @@ int main(void) {
     glDeleteProgram(shaderProgram);
     glDeleteProgram(uiProgram);
     glDeleteProgram(buttonProgram);
+    glDeleteProgram(selectionProgram);
     glDeleteBuffers(1, &uiVBO);
     glDeleteVertexArrays(1, &uiVAO);
     glDeleteBuffers(1, &buttonVBO);
     glDeleteVertexArrays(1, &buttonVAO);
+    glDeleteBuffers(1, &selectionEBO);
+    glDeleteBuffers(1, &selectionVBO);
+    glDeleteVertexArrays(1, &selectionVAO);
     SDL_GL_DeleteContext(ctx);
     SDL_DestroyWindow(window);
     SDL_Quit();
