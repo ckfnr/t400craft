@@ -33,6 +33,42 @@ static GLuint create_program_from_sources(const char* vertex_source, const char*
     return program;
 }
 
+static GLuint load_texture_array(const char* const* paths, int layer_count) {
+    int width = 0;
+    int height = 0;
+    unsigned char* layer_data[layer_count];
+
+    for (int i = 0; i < layer_count; ++i) {
+        layer_data[i] = stbi_load(paths[i], &width, &height, NULL, 4);
+        if (layer_data[i] == NULL) {
+            for (int j = 0; j < i; ++j) {
+                stbi_image_free(layer_data[j]);
+            }
+            return 0;
+        }
+    }
+
+    GLuint texture_array;
+    glGenTextures(1, &texture_array);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, texture_array);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_R, GL_REPEAT);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, width, height, layer_count, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+
+    for (int i = 0; i < layer_count; ++i) {
+        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, width, height, 1, GL_RGBA, GL_UNSIGNED_BYTE, layer_data[i]);
+        stbi_image_free(layer_data[i]);
+    }
+
+    glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    return texture_array;
+}
+
 static void append_rect(float* vertices, int* vertex_count, float x, float y, float rect_width, float rect_height) {
     float x2 = x + rect_width;
     float y2 = y + rect_height;
@@ -109,6 +145,72 @@ static void build_text_vertices(const char* text, float x, float y, float scale,
 
 static int point_in_rect(int px, int py, float x, float y, float rect_width, float rect_height) {
     return px >= (int)x && px <= (int)(x + rect_width) && py >= (int)y && py <= (int)(y + rect_height);
+}
+
+static int block_is_solid(BlockType type) {
+    return type != BLOCK_AIR;
+}
+
+static int player_collides_at(Chunk* chunk, vec3 position) {
+    const float half_width = 0.3f;
+    const float height = 2.0f;
+
+    float min_x = position[0] - half_width;
+    float max_x = position[0] + half_width;
+    float min_y = position[1] - height;
+    float max_y = position[1];
+    float min_z = position[2] - half_width;
+    float max_z = position[2] + half_width;
+
+    int start_x = (int)floorf(min_x);
+    int end_x = (int)floorf(max_x);
+    int start_y = (int)floorf(min_y);
+    int end_y = (int)floorf(max_y);
+    int start_z = (int)floorf(min_z);
+    int end_z = (int)floorf(max_z);
+
+    for (int x = start_x; x <= end_x; ++x) {
+        for (int y = start_y; y <= end_y; ++y) {
+            for (int z = start_z; z <= end_z; ++z) {
+                Block* block = chunk_get_block(chunk, x, y, z);
+                if (block != NULL && block_is_solid(block->type)) {
+                    float block_min_x = (float)x;
+                    float block_max_x = (float)x + 1.0f;
+                    float block_min_y = (float)y;
+                    float block_max_y = (float)y + 1.0f;
+                    float block_min_z = (float)z;
+                    float block_max_z = (float)z + 1.0f;
+
+                    if (max_x >= block_min_x && min_x <= block_max_x &&
+                        max_y >= block_min_y && min_y <= block_max_y &&
+                        max_z >= block_min_z && min_z <= block_max_z) {
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
+static void move_camera_with_collision(Camera* cam, Chunk* chunk, vec3 movement) {
+    vec3 next_position;
+
+    glm_vec3_copy(cam->position, next_position);
+    next_position[1] += movement[1];
+    if (!player_collides_at(chunk, next_position))
+        cam->position[1] = next_position[1];
+
+    glm_vec3_copy(cam->position, next_position);
+    next_position[0] += movement[0];
+    if (!player_collides_at(chunk, next_position))
+        cam->position[0] = next_position[0];
+
+    glm_vec3_copy(cam->position, next_position);
+    next_position[2] += movement[2];
+    if (!player_collides_at(chunk, next_position))
+        cam->position[2] = next_position[2];
 }
 
 int main(void) {
@@ -227,21 +329,12 @@ int main(void) {
     chunk_init(&chunk, 0, 0);
     Mesh chunk_mesh = chunk_build_mesh(&chunk);
 
-    int widthImg, heightImg, numColCh;
-    unsigned char* bytes = stbi_load("src/textures/dirtblock.png", &widthImg, &heightImg, &numColCh, 4); //texture
-
-    GLuint texture;
-    glGenTextures(1, &texture);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, widthImg, heightImg, 0, GL_RGBA, GL_UNSIGNED_BYTE, bytes);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    stbi_image_free(bytes);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    const char* world_textures[] = {
+        "src/textures/dirtblock.png",
+        "src/textures/grass_side.png",
+        "src/textures/grass_top.png",
+    };
+    GLuint texture = load_texture_array(world_textures, 3);
 
     int buttonWidthImg, buttonHeightImg, buttonNumColCh;
     unsigned char* buttonBytes = stbi_load("src/UI/button.png", &buttonWidthImg, &buttonHeightImg, &buttonNumColCh, 4);
@@ -338,7 +431,9 @@ int main(void) {
             int mouse_dx = 0, mouse_dy = 0;
             SDL_GetRelativeMouseState(&mouse_dx, &mouse_dy);
             const Uint8* keys = SDL_GetKeyboardState(NULL);
-            camera_inputs(&cam, keys, mouse_dx, mouse_dy, 0);
+            vec3 movement;
+            camera_inputs(&cam, keys, mouse_dx, mouse_dy, 0, movement);
+            move_camera_with_collision(&cam, &chunk, movement);
 
             camera_update(&cam, 45.0f, 0.1f, 100.0f);
             camera_export(&cam, shaderProgram, "camMatrix");
@@ -347,7 +442,7 @@ int main(void) {
             glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float*)model);
 
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, texture);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
             glUniform1i(glGetUniformLocation(shaderProgram, "tex0"), 0);
             mesh_draw(&chunk_mesh);
 
@@ -398,7 +493,7 @@ int main(void) {
             glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float*)model);
 
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, texture);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
             glUniform1i(glGetUniformLocation(shaderProgram, "tex0"), 0);
             mesh_draw(&chunk_mesh);
 

@@ -5,12 +5,27 @@
 #define MAX_VERTICES (CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z * 6 * 4)
 #define MAX_INDICES  (CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z * 6 * 6)
 
+static int block_face_texture_layer(BlockType type, int face) {
+    switch (type) {
+        case BLOCK_DIRT:
+            return 0;
+        case BLOCK_GRASS:
+            if (face == 0) return 2;
+            if (face == 1) return 0;
+            return 1;
+        case BLOCK_AIR:
+        default:
+            return 0;
+    }
+}
+
 static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
-                     float x, float y, float z, int face) {
+                     float x, float y, float z, int face, BlockType type) {
     // face: 0=top 1=bottom 2=front 3=back 4=left 5=right
     // brightness depending on side
     float bright[] = {1.0f, 0.4f, 0.8f, 0.8f, 0.6f, 0.6f};
     float b = bright[face];
+    float layer = (float)block_face_texture_layer(type, face);
 
     // 4 vertices of surface
     float positions[4][3];
@@ -54,15 +69,23 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
     }
 
     float uvs[4][2] = {{0,0},{1,0},{1,1},{0,1}};
+    if (face >= 2) {
+        float flipped_uvs[4][2] = {{0,1},{1,1},{1,0},{0,0}};
+        for (int i = 0; i < 4; ++i) {
+            uvs[i][0] = flipped_uvs[i][0];
+            uvs[i][1] = flipped_uvs[i][1];
+        }
+    }
 
     int base = *vc;
     for (int i = 0; i < 4; i++) {
-        verts[(*vc)*8+0] = positions[i][0];
-        verts[(*vc)*8+1] = positions[i][1];
-        verts[(*vc)*8+2] = positions[i][2];
-        verts[(*vc)*8+3] = b; verts[(*vc)*8+4] = b; verts[(*vc)*8+5] = b;
-        verts[(*vc)*8+6] = uvs[i][0];
-        verts[(*vc)*8+7] = uvs[i][1];
+        verts[(*vc)*9+0] = positions[i][0];
+        verts[(*vc)*9+1] = positions[i][1];
+        verts[(*vc)*9+2] = positions[i][2];
+        verts[(*vc)*9+3] = b; verts[(*vc)*9+4] = b; verts[(*vc)*9+5] = b;
+        verts[(*vc)*9+6] = uvs[i][0];
+        verts[(*vc)*9+7] = uvs[i][1];
+        verts[(*vc)*9+8] = layer;
         (*vc)++;
     }
 
@@ -75,7 +98,7 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
 }
 
 Mesh chunk_build_mesh(Chunk* chunk) {
-    GLfloat* verts = malloc(MAX_VERTICES * 8 * sizeof(GLfloat));
+    GLfloat* verts = malloc(MAX_VERTICES * 9 * sizeof(GLfloat));
     GLuint*  inds  = malloc(MAX_INDICES  * sizeof(GLuint));
     int vc = 0, ic = 0;
 
@@ -87,20 +110,21 @@ Mesh chunk_build_mesh(Chunk* chunk) {
         for (int y = 0; y < CHUNK_SIZE_Y; y++) {
             for (int z = 0; z < CHUNK_SIZE_Z; z++) {
                 if (chunk->blocks[x][y][z].type == BLOCK_AIR) continue;
+                BlockType type = chunk->blocks[x][y][z].type;
                 for (int face = 0; face < 6; face++) {
                     int nx = x + dx[face];
                     int ny = y + dy[face];
                     int nz = z + dz[face];
                     Block* neighbor = chunk_get_block(chunk, nx, ny, nz);
                     if (neighbor == NULL || neighbor->type == BLOCK_AIR) {
-                        add_face(verts, inds, &vc, &ic, (float)x, (float)y, (float)z, face);
+                        add_face(verts, inds, &vc, &ic, (float)x, (float)y, (float)z, face, type);
                     }
                 }
             }
         }
     }
 
-    Mesh m = mesh_create(verts, vc * 8 * sizeof(GLfloat), inds, ic * sizeof(GLuint));
+    Mesh m = mesh_create(verts, vc * 9 * sizeof(GLfloat), inds, ic * sizeof(GLuint));
     free(verts);
     free(inds);
     return m;

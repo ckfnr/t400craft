@@ -7,7 +7,13 @@ void chunk_init(Chunk* chunk, int cx, int cz) {
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
         for (int z = 0; z < CHUNK_SIZE_Z; z++) {
             for (int y = 0; y < CHUNK_SIZE_Y; y++) {
-                chunk->blocks[x][y][z].type = (y == 0) ? BLOCK_DIRT : BLOCK_AIR;
+                if (y == 0) {
+                    chunk->blocks[x][y][z].type = BLOCK_DIRT;
+                } else if (y == 1) {
+                    chunk->blocks[x][y][z].type = BLOCK_GRASS;
+                } else {
+                    chunk->blocks[x][y][z].type = BLOCK_AIR;
+                }
             }
         }
     }
