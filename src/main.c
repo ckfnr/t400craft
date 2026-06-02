@@ -282,15 +282,12 @@ static int raycast_block_selection(Chunk* chunk, vec3 origin, vec3 direction, fl
     return 0;
 }
 
-static int player_collides_at(Chunk* chunk, vec3 position) {
+static int player_collides_at_h(Chunk* chunk, vec3 position, float ph) {
     const float half_width = 0.3f;
-    const float height = 1.7f;
-
-
     float min_x = position[0] - half_width + 0.001f;
     float max_x = position[0] + half_width - 0.001f;
-    float min_y = position[1] - height    + 0.001f;
-    float max_y = position[1] + 0.1f;
+    float min_y = position[1]              + 0.001f;
+    float max_y = position[1] + ph         - 0.001f;
     float min_z = position[2] - half_width + 0.001f;
     float max_z = position[2] + half_width - 0.001f;
 
@@ -326,30 +323,46 @@ static int player_collides_at(Chunk* chunk, vec3 position) {
     return 0;
 }
 
-static int player_grounded_at(Chunk* chunk, vec3 position) {
+static int player_collides_at(Chunk* chunk, vec3 position) {
+    return player_collides_at_h(chunk, position, 1.8f);
+}
+
+static int player_grounded_at_h(Chunk* chunk, vec3 position, float ph) {
     vec3 probe;
     glm_vec3_copy(position, probe);
     probe[1] -= 0.05f;
-    return player_collides_at(chunk, probe);
+    return player_collides_at_h(chunk, probe, ph);
+}
+
+static int player_grounded_at(Chunk* chunk, vec3 position) {
+    return player_grounded_at_h(chunk, position, 1.8f);
+}
+
+static void move_with_collision_h(Camera* cam, Chunk* chunk, vec3 movement, float ph, int edge_stop) {
+    vec3 next;
+
+    glm_vec3_copy(cam->position, next);
+    next[1] += movement[1];
+    if (!player_collides_at_h(chunk, next, ph))
+        cam->position[1] = next[1];
+
+    glm_vec3_copy(cam->position, next);
+    next[0] += movement[0];
+    if (!player_collides_at_h(chunk, next, ph)) {
+        if (!edge_stop || player_grounded_at_h(chunk, next, ph))
+            cam->position[0] = next[0];
+    }
+
+    glm_vec3_copy(cam->position, next);
+    next[2] += movement[2];
+    if (!player_collides_at_h(chunk, next, ph)) {
+        if (!edge_stop || player_grounded_at_h(chunk, next, ph))
+            cam->position[2] = next[2];
+    }
 }
 
 static void move_camera_with_collision(Camera* cam, Chunk* chunk, vec3 movement) {
-    vec3 next_position;
-
-    glm_vec3_copy(cam->position, next_position);
-    next_position[1] += movement[1];
-    if (!player_collides_at(chunk, next_position))
-        cam->position[1] = next_position[1];
-
-    glm_vec3_copy(cam->position, next_position);
-    next_position[0] += movement[0];
-    if (!player_collides_at(chunk, next_position))
-        cam->position[0] = next_position[0];
-
-    glm_vec3_copy(cam->position, next_position);
-    next_position[2] += movement[2];
-    if (!player_collides_at(chunk, next_position))
-        cam->position[2] = next_position[2];
+    move_with_collision_h(cam, chunk, movement, 1.8f, 0);
 }
 
 static const GLfloat selection_outline_vertices[] = {
@@ -572,19 +585,25 @@ int main(void) {
     int gravity_enabled = 0;
 
 
-    const float WALK_SPEED      = 4.317f;
-    const float SPRINT_SPEED    = 5.612f;
-    const float FLY_SPEED       = 10.92f;
-    const float FLY_SPRINT_SPEED= 21.6f;
-    const float GRAVITY         = 28.0f;
-    const float JUMP_IMPULSE    =  8.0f;
-    const float FLOOR_Y         = -4.0f;
-    const float HFRICTION_PS    = 0.03f;
-    const float AIR_ACCEL_FRAC  = 0.2f;
-    const Uint32 JUMP_BUFFER_MS = 120;
+    const float WALK_SPEED       = 4.317f;
+    const float SPRINT_SPEED     = 5.612f;
+    const float CROUCH_SPEED     = 1.31f;
+    const float FLY_SPEED        = 10.92f;
+    const float FLY_SPRINT_SPEED = 21.6f;
+    const float GRAVITY          = 28.0f;
+    const float JUMP_IMPULSE     =  8.0f;
+    const float FLOOR_Y          = -4.0f;
+    const float HFRICTION_PS     = 0.03f;
+    const float AIR_ACCEL_FRAC   = 0.2f;
+    const Uint32 JUMP_BUFFER_MS  = 120;
+    const float STAND_HEIGHT     = 1.8f;
+    const float CROUCH_HEIGHT    = 1.35f;
+    const float STAND_EYE        = 1.62f;
+    const float CROUCH_EYE       = 1.27f;
 
     float vel_x = 0.0f, vel_y = 0.0f, vel_z = 0.0f;
     int   jump_buffer = 0;
+    int   crouching = 0;
     Uint32 last_time = SDL_GetTicks();
 
     while (running) {
@@ -673,13 +692,30 @@ int main(void) {
             int sprinting = 0;
             camera_get_wish_dir(&cam, keys, wish_dir, &sprinting);
 
+            int want_crouch = (keys[SDL_SCANCODE_LSHIFT] && gravity_enabled) ? 1 : 0;
+
+            if (want_crouch && !crouching) {
+                crouching = 1;
+            } else if (!want_crouch && crouching) {
+                vec3 stand_test;
+                glm_vec3_copy(cam.position, stand_test);
+                if (!player_collides_at_h(&chunk, stand_test, STAND_HEIGHT))
+                    crouching = 0;
+            }
+
+            float cur_height = crouching ? CROUCH_HEIGHT : STAND_HEIGHT;
+
             if (jump_buffer > 0)
                 jump_buffer -= (int)(dt * 1000.0f);
 
             if (gravity_enabled) {
-                int grounded = player_grounded_at(&chunk, cam.position);
+                int grounded = player_grounded_at_h(&chunk, cam.position, cur_height);
 
-                float target_speed = sprinting ? SPRINT_SPEED : WALK_SPEED;
+                if (crouching && !grounded) crouching = 0;
+                cur_height = crouching ? CROUCH_HEIGHT : STAND_HEIGHT;
+
+                float target_speed = crouching ? CROUCH_SPEED
+                                   : (sprinting ? SPRINT_SPEED : WALK_SPEED);
                 float accel_frac   = grounded ? 1.0f : AIR_ACCEL_FRAC;
 
                 float wx = wish_dir[0] * target_speed;
@@ -698,7 +734,6 @@ int main(void) {
 
                 if (grounded) {
                     float friction = powf(HFRICTION_PS, dt);
-
                     if (wish_dir[0] == 0.0f && wish_dir[2] == 0.0f) {
                         vel_x *= friction;
                         vel_z *= friction;
@@ -706,7 +741,7 @@ int main(void) {
                     if (vel_y < 0.0f) vel_y = 0.0f;
                 }
 
-                if (grounded && jump_buffer > 0) {
+                if (grounded && jump_buffer > 0 && !crouching) {
                     vel_y = JUMP_IMPULSE;
                     jump_buffer = 0;
                 }
@@ -714,16 +749,15 @@ int main(void) {
                 vel_y -= GRAVITY * dt;
 
                 vec3 move_xz = {vel_x * dt, 0.0f, vel_z * dt};
-                move_camera_with_collision(&cam, &chunk, move_xz);
+                move_with_collision_h(&cam, &chunk, move_xz, cur_height, crouching);
 
                 vec3 next_pos;
                 glm_vec3_copy(cam.position, next_pos);
                 next_pos[1] += vel_y * dt;
-                if (!player_collides_at(&chunk, next_pos)) {
+                if (!player_collides_at_h(&chunk, next_pos, cur_height))
                     cam.position[1] = next_pos[1];
-                } else {
+                else
                     vel_y = 0.0f;
-                }
 
                 if (cam.position[1] < FLOOR_Y) {
                     cam.position[1] = FLOOR_Y;
@@ -731,7 +765,6 @@ int main(void) {
                 }
 
             } else {
-
                 float fly_speed = sprinting ? FLY_SPRINT_SPEED : FLY_SPEED;
 
                 vel_x = wish_dir[0] * fly_speed;
@@ -742,8 +775,12 @@ int main(void) {
                 if (keys[SDL_SCANCODE_LSHIFT]) vel_y = -fly_speed;
 
                 vec3 movement = {vel_x * dt, vel_y * dt, vel_z * dt};
-                move_camera_with_collision(&cam, &chunk, movement);
+                move_with_collision_h(&cam, &chunk, movement, cur_height, 0);
             }
+
+            float eye_y = cam.position[1] + (crouching ? CROUCH_EYE : STAND_EYE);
+            float real_y = cam.position[1];
+            cam.position[1] = eye_y;
 
             BlockSelection selected_block = {0};
             raycast_block_selection(&chunk, cam.position, cam.orientation, 6.0f, &selected_block);
@@ -760,7 +797,8 @@ int main(void) {
                 Block* place_block = chunk_get_block(&chunk, selected_block.place_x, selected_block.place_y, selected_block.place_z);
                 if (place_block != NULL && place_block->type == BLOCK_AIR) {
                     place_block->type = BLOCK_COBBLESTONE;
-                    if (!player_collides_at(&chunk, cam.position)) {
+                    vec3 foot_pos = {cam.position[0], real_y, cam.position[2]};
+                    if (!player_collides_at_h(&chunk, foot_pos, cur_height)) {
                         rebuild_chunk_mesh(&chunk, &chunk_mesh);
                         selected_block.hit = 0;
                         raycast_block_selection(&chunk, cam.position, cam.orientation, 6.0f, &selected_block);
@@ -771,6 +809,7 @@ int main(void) {
             }
 
             camera_update(&cam, 45.0f, 0.1f, 100.0f);
+            cam.position[1] = real_y;
             camera_export(&cam, shaderProgram, "camMatrix");
 
             int modelLoc = glGetUniformLocation(shaderProgram, "model");
@@ -844,7 +883,10 @@ int main(void) {
             glEnable(GL_CULL_FACE);
             glEnable(GL_DEPTH_TEST);
         } else {
+            float paused_real_y = cam.position[1];
+            cam.position[1] += crouching ? CROUCH_EYE : STAND_EYE;
             camera_update(&cam, 45.0f, 0.1f, 100.0f);
+            cam.position[1] = paused_real_y;
             camera_export(&cam, shaderProgram, "camMatrix");
 
             int modelLoc = glGetUniformLocation(shaderProgram, "model");
