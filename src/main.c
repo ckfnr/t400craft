@@ -570,10 +570,22 @@ int main(void) {
     int paused = 0;
     SDL_Event event;
     int gravity_enabled = 0;
-    float vertical_velocity = 0.0f;
-    const float gravity_acceleration = 0.018f;
-    const float jump_velocity = 0.22f;
-    const float gravity_floor_y = -4.0f;
+
+
+    const float WALK_SPEED      = 4.317f;
+    const float SPRINT_SPEED    = 5.612f;
+    const float FLY_SPEED       = 10.92f;
+    const float FLY_SPRINT_SPEED= 21.6f;
+    const float GRAVITY         = 28.0f;
+    const float JUMP_IMPULSE    =  8.0f;
+    const float FLOOR_Y         = -4.0f;
+    const float HFRICTION_PS    = 0.03f;
+    const float AIR_ACCEL_FRAC  = 0.2f;
+    const Uint32 JUMP_BUFFER_MS = 120;
+
+    float vel_x = 0.0f, vel_y = 0.0f, vel_z = 0.0f;
+    int   jump_buffer = 0;
+    Uint32 last_time = SDL_GetTicks();
 
     while (running) {
         int break_requested = 0;
@@ -591,6 +603,9 @@ int main(void) {
                     SDL_ShowCursor(SDL_DISABLE);
                     cam.first_click = 1;
                 }
+            } else if (!paused && event.type == SDL_KEYDOWN && event.key.repeat == 0
+                       && event.key.keysym.sym == SDLK_SPACE && gravity_enabled) {
+                jump_buffer = (int)JUMP_BUFFER_MS;
             } else if (paused && event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
                 int button_x = 0;
                 int button_y = 0;
@@ -612,7 +627,7 @@ int main(void) {
                 } else if (point_in_rect(event.button.x, event.button.y, (float)button_x, (float)gravity_button_y, button_width, button_height)) {
                     gravity_enabled = !gravity_enabled;
                     if (!gravity_enabled) {
-                        vertical_velocity = 0.0f;
+                        vel_y = 0.0f;
                     }
                 }
             } else if (!paused && event.type == SDL_MOUSEBUTTONDOWN) {
@@ -642,43 +657,91 @@ int main(void) {
         mat4 model;
         glm_mat4_identity(model);
 
+        Uint32 now = SDL_GetTicks();
+        float dt = (float)(now - last_time) * 0.001f;
+        if (dt > 0.1f) dt = 0.1f;
+        last_time = now;
+
         if (!paused) {
             int mouse_dx = 0, mouse_dy = 0;
             SDL_GetRelativeMouseState(&mouse_dx, &mouse_dy);
             const Uint8* keys = SDL_GetKeyboardState(NULL);
-            vec3 movement;
-            camera_inputs(&cam, keys, mouse_dx, mouse_dy, 0, gravity_enabled, movement);
+
+            camera_rotate(&cam, mouse_dx, mouse_dy);
+
+            vec3 wish_dir;
+            int sprinting = 0;
+            camera_get_wish_dir(&cam, keys, wish_dir, &sprinting);
+
+            if (jump_buffer > 0)
+                jump_buffer -= (int)(dt * 1000.0f);
 
             if (gravity_enabled) {
                 int grounded = player_grounded_at(&chunk, cam.position);
 
-                if (grounded && vertical_velocity < 0.0f) {
-                    vertical_velocity = 0.0f;
+                float target_speed = sprinting ? SPRINT_SPEED : WALK_SPEED;
+                float accel_frac   = grounded ? 1.0f : AIR_ACCEL_FRAC;
+
+                float wx = wish_dir[0] * target_speed;
+                float wz = wish_dir[2] * target_speed;
+
+                float accel = target_speed * 10.0f * accel_frac * dt;
+                float dx_diff = wx - vel_x;
+                float dz_diff = wz - vel_z;
+                float diff_len = sqrtf(dx_diff*dx_diff + dz_diff*dz_diff);
+                if (diff_len > 0.0001f) {
+                    float step = accel;
+                    if (step > diff_len) step = diff_len;
+                    vel_x += (dx_diff / diff_len) * step;
+                    vel_z += (dz_diff / diff_len) * step;
                 }
 
-                if (grounded && keys[SDL_SCANCODE_SPACE]) {
-                    vertical_velocity = jump_velocity;
+                if (grounded) {
+                    float friction = powf(HFRICTION_PS, dt);
+
+                    if (wish_dir[0] == 0.0f && wish_dir[2] == 0.0f) {
+                        vel_x *= friction;
+                        vel_z *= friction;
+                    }
+                    if (vel_y < 0.0f) vel_y = 0.0f;
                 }
 
-                move_camera_with_collision(&cam, &chunk, movement);
+                if (grounded && jump_buffer > 0) {
+                    vel_y = JUMP_IMPULSE;
+                    jump_buffer = 0;
+                }
 
-                vertical_velocity -= gravity_acceleration;
+                vel_y -= GRAVITY * dt;
 
-                vec3 next_position;
-                glm_vec3_copy(cam.position, next_position);
-                next_position[1] += vertical_velocity;
+                vec3 move_xz = {vel_x * dt, 0.0f, vel_z * dt};
+                move_camera_with_collision(&cam, &chunk, move_xz);
 
-                if (!player_collides_at(&chunk, next_position)) {
-                    cam.position[1] = next_position[1];
+                vec3 next_pos;
+                glm_vec3_copy(cam.position, next_pos);
+                next_pos[1] += vel_y * dt;
+                if (!player_collides_at(&chunk, next_pos)) {
+                    cam.position[1] = next_pos[1];
                 } else {
-                    vertical_velocity = 0.0f;
+                    vel_y = 0.0f;
                 }
 
-                if (cam.position[1] < gravity_floor_y) {
-                    cam.position[1] = gravity_floor_y;
-                    vertical_velocity = 0.0f;
+                if (cam.position[1] < FLOOR_Y) {
+                    cam.position[1] = FLOOR_Y;
+                    vel_y = 0.0f;
                 }
+
             } else {
+
+                float fly_speed = sprinting ? FLY_SPRINT_SPEED : FLY_SPEED;
+
+                vel_x = wish_dir[0] * fly_speed;
+                vel_z = wish_dir[2] * fly_speed;
+                vel_y = 0.0f;
+
+                if (keys[SDL_SCANCODE_SPACE])  vel_y =  fly_speed;
+                if (keys[SDL_SCANCODE_LSHIFT]) vel_y = -fly_speed;
+
+                vec3 movement = {vel_x * dt, vel_y * dt, vel_z * dt};
                 move_camera_with_collision(&cam, &chunk, movement);
             }
 
