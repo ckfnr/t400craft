@@ -18,22 +18,17 @@ static int block_face_texture_layer(BlockType type, int face) {
     }
 }
 
-static float get_block_light(Chunk* chunk, int x, int y, int z) {
-    if (x < 0 || x >= CHUNK_SIZE_X || y < 0 || y >= CHUNK_SIZE_Y || z < 0 || z >= CHUNK_SIZE_Z)
-        return 1.0f;
-    if (chunk->blocks[x][y][z].type != BLOCK_AIR)
-        return 0.0f;
+static int block_has_sky(Chunk* chunk, int x, int y, int z) {
     Block* above = chunk_get_block(chunk, x, y + 1, z);
-    if (above == NULL || above->type == BLOCK_AIR)
-        return 1.0f;
-    return 0.15f;
+    return (above == NULL || above->type == BLOCK_AIR);
 }
 
 static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
                      float x, float y, float z, int face, BlockType type,
-                     float light, int dynamic) {
-    float face_dim[] = {1.0f, 0.5f, 0.8f, 0.8f, 0.6f, 0.6f};
-    float b = dynamic ? (light * face_dim[face]) : face_dim[face];
+                     int sky, int dynamic) {
+    float face_dim[] = {1.0f, 0.6f, 0.8f, 0.8f, 0.7f, 0.7f};
+    float b = face_dim[face];
+    if (dynamic && !sky) b *= 0.3f;
     float layer = (float)block_face_texture_layer(type, face);
 
     float positions[4][3];
@@ -111,14 +106,19 @@ Mesh chunk_build_mesh_dynamic(Chunk* chunk, int dynamic) {
             for (int z = 0; z < CHUNK_SIZE_Z; z++) {
                 if (chunk->blocks[x][y][z].type == BLOCK_AIR) continue;
                 BlockType type = chunk->blocks[x][y][z].type;
+                int sky = block_has_sky(chunk, x, y, z);
                 for (int face = 0; face < 6; face++) {
                     int nx = x + dx[face];
                     int ny = y + dy[face];
                     int nz = z + dz[face];
                     Block* neighbor = chunk_get_block(chunk, nx, ny, nz);
                     if (neighbor != NULL && neighbor->type != BLOCK_AIR) continue;
-                    float light = get_block_light(chunk, nx, ny, nz);
-                    add_face(verts, inds, &vc, &ic, (float)x, (float)y, (float)z, face, type, light, dynamic);
+                    int face_sky = sky;
+                    if (face >= 2) {
+                        face_sky = block_has_sky(chunk, nx, y, nz);
+                        if (face_sky == 0) face_sky = sky;
+                    }
+                    add_face(verts, inds, &vc, &ic, (float)x, (float)y, (float)z, face, type, face_sky, dynamic);
                 }
             }
         }

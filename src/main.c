@@ -90,12 +90,23 @@ static const unsigned char* glyph_rows(char c) {
     static const unsigned char v_glyph[7]      = {17, 17, 17, 17, 17, 10, 4};
     static const unsigned char y_glyph[7]      = {17, 17, 17, 14, 4,  4,  4};
     static const unsigned char a_glyph[7]      = {14, 17, 17, 31, 17, 17, 17};
+    static const unsigned char d_glyph[7]      = {1,  1,  15, 17, 17, 17, 15};
+    static const unsigned char f_glyph[7]      = {15, 16, 16, 30, 16, 16, 16};
+    static const unsigned char h_glyph[7]      = {17, 17, 17, 31, 17, 17, 17};
+    static const unsigned char k_glyph[7]      = {17, 18, 20, 24, 20, 18, 17};
+    static const unsigned char m_glyph[7]      = {17, 27, 21, 21, 17, 17, 17};
+    static const unsigned char s_glyph[7]      = {14, 17, 16, 14, 1,  17, 14};
+    static const unsigned char w_glyph[7]      = {17, 17, 17, 21, 21, 27, 17};
+    static const unsigned char b_glyph[7]      = {16, 16, 30, 17, 17, 17, 30};
     switch (c) {
-        case 'a': return a_glyph; case 'c': return c_glyph; case 'e': return e_glyph;
-        case 'g': return g_glyph; case 'i': return i_glyph; case 'l': return l_glyph;
+        case 'a': return a_glyph; case 'b': return b_glyph; case 'c': return c_glyph;
+        case 'd': return d_glyph; case 'e': return e_glyph; case 'f': return f_glyph;
+        case 'g': return g_glyph; case 'h': return h_glyph; case 'i': return i_glyph;
+        case 'k': return k_glyph; case 'l': return l_glyph; case 'm': return m_glyph;
         case 'n': return n_glyph; case 'o': return o_glyph; case 'p': return p_glyph;
-        case 'r': return r_glyph; case 't': return t_glyph; case 'u': return u_glyph;
-        case 'v': return v_glyph; case 'y': return y_glyph; default:  return blank;
+        case 'r': return r_glyph; case 's': return s_glyph; case 't': return t_glyph;
+        case 'u': return u_glyph; case 'v': return v_glyph; case 'w': return w_glyph;
+        case 'y': return y_glyph; default:  return blank;
     }
 }
 
@@ -267,7 +278,7 @@ int main(void) {
     GLuint uiVAO, uiVBO;
     glGenVertexArrays(1, &uiVAO); glGenBuffers(1, &uiVBO);
     glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER, uiVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(float)*8192, NULL, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float)*32768, NULL, GL_DYNAMIC_DRAW);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2*sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
@@ -684,7 +695,7 @@ int main(void) {
             glDrawArrays(GL_TRIANGLES, 0, 6);
 
             glUseProgram(uiProgram); glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER, uiVBO);
-            float tverts[8192]; int tc = 0;
+            float tverts[32768]; int tc = 0;
             float ts = 2.2f;
             const char* lbl = "continue playing";
             float tw = 0.0f;
