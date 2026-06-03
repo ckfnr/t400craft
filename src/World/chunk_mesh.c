@@ -1,68 +1,71 @@
 #include "chunk_mesh.h"
 #include <stdlib.h>
 
-// maximum vertices: 6 sides * 4 vertices * all blocks
 #define MAX_VERTICES (CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z * 6 * 4)
 #define MAX_INDICES  (CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z * 6 * 6)
 
 static int block_face_texture_layer(BlockType type, int face) {
     switch (type) {
-        case BLOCK_DIRT:
-            return 0;
+        case BLOCK_DIRT:        return 0;
         case BLOCK_GRASS:
             if (face == 0) return 2;
             if (face == 1) return 0;
             return 1;
-        case BLOCK_COBBLESTONE:
-            return 3;
+        case BLOCK_COBBLESTONE: return 3;
+        case BLOCK_STONE:       return 3;
         case BLOCK_AIR:
-        default:
-            return 0;
+        default:                return 0;
     }
 }
 
+static int has_sky_access(Chunk* chunk, int x, int y, int z) {
+    for (int cy = y + 1; cy < CHUNK_SIZE_Y; cy++) {
+        Block* b = chunk_get_block(chunk, x, cy, z);
+        if (b && b->type != BLOCK_AIR) return 0;
+    }
+    return 1;
+}
+
 static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
-                     float x, float y, float z, int face, BlockType type) {
-    // face: 0=top 1=bottom 2=front 3=back 4=left 5=right
-    // brightness depending on side
-    float bright[] = {1.0f, 0.4f, 0.8f, 0.8f, 0.6f, 0.6f};
-    float b = bright[face];
+                     float x, float y, float z, int face, BlockType type, int sky) {
+    float face_bright[] = {1.0f, 0.4f, 0.8f, 0.8f, 0.6f, 0.6f};
+    float b = face_bright[face];
+    if (!sky) b *= 0.05f;
     float layer = (float)block_face_texture_layer(type, face);
 
-    // 4 vertices of surface
     float positions[4][3];
     switch (face) {
-        case 0: // top
+        case 0:
             positions[0][0]=x;     positions[0][1]=y+1; positions[0][2]=z+1;
             positions[1][0]=x+1;   positions[1][1]=y+1; positions[1][2]=z+1;
             positions[2][0]=x+1;   positions[2][1]=y+1; positions[2][2]=z;
             positions[3][0]=x;     positions[3][1]=y+1; positions[3][2]=z;
             break;
-        case 1: // bottom
+        case 1:
             positions[0][0]=x;     positions[0][1]=y;   positions[0][2]=z;
             positions[1][0]=x+1;   positions[1][1]=y;   positions[1][2]=z;
             positions[2][0]=x+1;   positions[2][1]=y;   positions[2][2]=z+1;
             positions[3][0]=x;     positions[3][1]=y;   positions[3][2]=z+1;
-    break;
-        case 2: // front
+            break;
+        case 2:
             positions[0][0]=x;     positions[0][1]=y;   positions[0][2]=z+1;
             positions[1][0]=x+1;   positions[1][1]=y;   positions[1][2]=z+1;
             positions[2][0]=x+1;   positions[2][1]=y+1; positions[2][2]=z+1;
             positions[3][0]=x;     positions[3][1]=y+1; positions[3][2]=z+1;
             break;
-        case 3: // back
+        case 3:
             positions[0][0]=x+1;   positions[0][1]=y;   positions[0][2]=z;
             positions[1][0]=x;     positions[1][1]=y;   positions[1][2]=z;
             positions[2][0]=x;     positions[2][1]=y+1; positions[2][2]=z;
             positions[3][0]=x+1;   positions[3][1]=y+1; positions[3][2]=z;
             break;
-        case 4: // left
+        case 4:
             positions[0][0]=x;     positions[0][1]=y;   positions[0][2]=z;
             positions[1][0]=x;     positions[1][1]=y;   positions[1][2]=z+1;
             positions[2][0]=x;     positions[2][1]=y+1; positions[2][2]=z+1;
             positions[3][0]=x;     positions[3][1]=y+1; positions[3][2]=z;
             break;
-        case 5: // right
+        default:
             positions[0][0]=x+1;   positions[0][1]=y;   positions[0][2]=z+1;
             positions[1][0]=x+1;   positions[1][1]=y;   positions[1][2]=z;
             positions[2][0]=x+1;   positions[2][1]=y+1; positions[2][2]=z;
@@ -72,11 +75,8 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
 
     float uvs[4][2] = {{0,0},{1,0},{1,1},{0,1}};
     if (face >= 2) {
-        float flipped_uvs[4][2] = {{0,1},{1,1},{1,0},{0,0}};
-        for (int i = 0; i < 4; ++i) {
-            uvs[i][0] = flipped_uvs[i][0];
-            uvs[i][1] = flipped_uvs[i][1];
-        }
+        float flipped[4][2] = {{0,1},{1,1},{1,0},{0,0}};
+        for (int i = 0; i < 4; ++i) { uvs[i][0]=flipped[i][0]; uvs[i][1]=flipped[i][1]; }
     }
 
     int base = *vc;
@@ -90,13 +90,8 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
         verts[(*vc)*9+8] = layer;
         (*vc)++;
     }
-
-    inds[(*ic)++] = base+0;
-    inds[(*ic)++] = base+1;
-    inds[(*ic)++] = base+2;
-    inds[(*ic)++] = base+0;
-    inds[(*ic)++] = base+2;
-    inds[(*ic)++] = base+3;
+    inds[(*ic)++] = base+0; inds[(*ic)++] = base+1; inds[(*ic)++] = base+2;
+    inds[(*ic)++] = base+0; inds[(*ic)++] = base+2; inds[(*ic)++] = base+3;
 }
 
 Mesh chunk_build_mesh(Chunk* chunk) {
@@ -113,13 +108,14 @@ Mesh chunk_build_mesh(Chunk* chunk) {
             for (int z = 0; z < CHUNK_SIZE_Z; z++) {
                 if (chunk->blocks[x][y][z].type == BLOCK_AIR) continue;
                 BlockType type = chunk->blocks[x][y][z].type;
+                int sky = has_sky_access(chunk, x, y, z);
                 for (int face = 0; face < 6; face++) {
                     int nx = x + dx[face];
                     int ny = y + dy[face];
                     int nz = z + dz[face];
                     Block* neighbor = chunk_get_block(chunk, nx, ny, nz);
                     if (neighbor == NULL || neighbor->type == BLOCK_AIR) {
-                        add_face(verts, inds, &vc, &ic, (float)x, (float)y, (float)z, face, type);
+                        add_face(verts, inds, &vc, &ic, (float)x, (float)y, (float)z, face, type, sky);
                     }
                 }
             }

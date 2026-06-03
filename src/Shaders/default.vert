@@ -7,18 +7,16 @@ layout (location = 3) in float aTexLayer;
 out vec3 color;
 out vec2 texCoord;
 out float texLayer;
+out float fog_depth;
 
-uniform float scale;
 uniform mat4 camMatrix;
-
 uniform mat4 model;
-uniform mat4 view;
-uniform mat4 proj;
 
 void main()
 {
-   gl_Position = camMatrix * model * vec4(aPos, 1.0);
-   color = aColor;
-   texCoord = aTexCoord;
-   texLayer = aTexLayer;
+    gl_Position = camMatrix * model * vec4(aPos, 1.0);
+    fog_depth   = gl_Position.w;
+    color       = aColor;
+    texCoord    = aTexCoord;
+    texLayer    = aTexLayer;
 }

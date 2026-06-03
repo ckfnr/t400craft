@@ -6,6 +6,7 @@ typedef enum {
     BLOCK_DIRT,
     BLOCK_GRASS,
     BLOCK_COBBLESTONE,
+    BLOCK_STONE,
 } BlockType;
 
 typedef struct {
