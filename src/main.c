@@ -75,29 +75,29 @@ static void append_rect(float* vertices, int* vertex_count, float x, float y, fl
 }
 
 static const unsigned char* glyph_rows(char c) {
-    static const unsigned char blank[7]        = {0,  0,  0,  0,  0,  0,  0};
-    static const unsigned char c_glyph[7]      = {14, 16, 16, 16, 16, 16, 14};
-    static const unsigned char e_glyph[7]      = {14, 16, 16, 30, 16, 16, 14};
-    static const unsigned char g_glyph[7]      = {14, 17, 16, 16, 19, 17, 14};
-    static const unsigned char i_glyph[7]      = {4,  0,  4,  4,  4,  4,  4};
-    static const unsigned char l_glyph[7]      = {16, 16, 16, 16, 16, 16, 14};
-    static const unsigned char n_glyph[7]      = {17, 25, 21, 19, 17, 17, 17};
-    static const unsigned char o_glyph[7]      = {14, 17, 17, 17, 17, 17, 14};
-    static const unsigned char p_glyph[7]      = {30, 17, 17, 30, 16, 16, 16};
-    static const unsigned char r_glyph[7]      = {30, 17, 17, 30, 20, 18, 17};
-    static const unsigned char t_glyph[7]      = {31, 4,  4,  4,  4,  4,  4};
-    static const unsigned char u_glyph[7]      = {17, 17, 17, 17, 17, 17, 14};
-    static const unsigned char v_glyph[7]      = {17, 17, 17, 17, 17, 10, 4};
-    static const unsigned char y_glyph[7]      = {17, 17, 17, 14, 4,  4,  4};
-    static const unsigned char a_glyph[7]      = {14, 17, 17, 31, 17, 17, 17};
-    static const unsigned char d_glyph[7]      = {1,  1,  15, 17, 17, 17, 15};
-    static const unsigned char f_glyph[7]      = {15, 16, 16, 30, 16, 16, 16};
-    static const unsigned char h_glyph[7]      = {17, 17, 17, 31, 17, 17, 17};
-    static const unsigned char k_glyph[7]      = {17, 18, 20, 24, 20, 18, 17};
-    static const unsigned char m_glyph[7]      = {17, 27, 21, 21, 17, 17, 17};
-    static const unsigned char s_glyph[7]      = {14, 17, 16, 14, 1,  17, 14};
-    static const unsigned char w_glyph[7]      = {17, 17, 17, 21, 21, 27, 17};
-    static const unsigned char b_glyph[7]      = {16, 16, 30, 17, 17, 17, 30};
+    static const unsigned char blank[7] = {0,   0,   0,   0,   0,   0,   0  };
+    static const unsigned char a_glyph[7] = {4,  10,  17,  17,  31,  17,  17 };
+    static const unsigned char b_glyph[7] = {30, 17,  17,  30,  17,  17,  30 };
+    static const unsigned char c_glyph[7] = {14, 17,  16,  16,  16,  17,  14 };
+    static const unsigned char d_glyph[7] = {30, 17,  17,  17,  17,  17,  30 };
+    static const unsigned char e_glyph[7] = {31, 16,  16,  30,  16,  16,  31 };
+    static const unsigned char f_glyph[7] = {31, 16,  16,  30,  16,  16,  16 };
+    static const unsigned char g_glyph[7] = {14, 17,  16,  23,  17,  17,  14 };
+    static const unsigned char h_glyph[7] = {17, 17,  17,  31,  17,  17,  17 };
+    static const unsigned char i_glyph[7] = {14, 4,   4,   4,   4,   4,   14 };
+    static const unsigned char k_glyph[7] = {17, 18,  20,  28,  20,  18,  17 };
+    static const unsigned char l_glyph[7] = {16, 16,  16,  16,  16,  16,  31 };
+    static const unsigned char m_glyph[7] = {17, 27,  21,  21,  17,  17,  17 };
+    static const unsigned char n_glyph[7] = {17, 25,  25,  21,  19,  19,  17 };
+    static const unsigned char o_glyph[7] = {14, 17,  17,  17,  17,  17,  14 };
+    static const unsigned char p_glyph[7] = {30, 17,  17,  30,  16,  16,  16 };
+    static const unsigned char r_glyph[7] = {30, 17,  17,  30,  20,  18,  17 };
+    static const unsigned char s_glyph[7] = {14, 17,  16,  14,  1,   17,  14 };
+    static const unsigned char t_glyph[7] = {31, 4,   4,   4,   4,   4,   4  };
+    static const unsigned char u_glyph[7] = {17, 17,  17,  17,  17,  17,  14 };
+    static const unsigned char v_glyph[7] = {17, 17,  17,  17,  10,  10,  4  };
+    static const unsigned char w_glyph[7] = {17, 17,  17,  21,  21,  27,  17 };
+    static const unsigned char y_glyph[7] = {17, 17,  10,  4,   4,   4,   4  };
     switch (c) {
         case 'a': return a_glyph; case 'b': return b_glyph; case 'c': return c_glyph;
         case 'd': return d_glyph; case 'e': return e_glyph; case 'f': return f_glyph;
