@@ -62,6 +62,7 @@ void world_init(World* world, int center_cx, int center_cz, const char* save_dir
     strncpy(world->save_dir, save_dir, sizeof(world->save_dir) - 1);
     world->center_cx = center_cx;
     world->center_cz = center_cz;
+    world->dynamic_lighting = 1;
 
     mkdir(save_dir, 0755);
 
@@ -225,6 +226,6 @@ void world_rebuild_mesh(World* world, int cx, int cz) {
     WorldSlot* s = world_get_slot(world, cx, cz);
     if (!s) return;
     if (s->mesh_valid) mesh_delete(&s->mesh);
-    s->mesh = chunk_build_mesh(&s->chunk);
+    s->mesh = chunk_build_mesh_dynamic(&s->chunk, world->dynamic_lighting);
     s->mesh_valid = 1;
 }

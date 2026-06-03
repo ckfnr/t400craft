@@ -330,12 +330,12 @@ int main(void) {
             world_rebuild_mesh(world, world->slots[i].chunk.cx, world->slots[i].chunk.cz);
 
     const char* world_textures[] = {
-        "textures/dirtblock.png",
-        "textures/grass_side.png",
-        "textures/grass_top.png",
-        "textures/cobblestone.png",
+        "src/textures/dirtblock.png",
+        "src/textures/grass_side.png",
+        "src/textures/grass_top.png",
+        "src/textures/cobblestone.png",
     };
-    GLuint texture = load_texture_array(world_textures, 5);
+    GLuint texture = load_texture_array(world_textures, 4);
 
     int buttonW, buttonH, buttonCh;
     unsigned char* buttonBytes = stbi_load("src/UI/button.png", &buttonW, &buttonH, &buttonCh, 4);
@@ -380,7 +380,8 @@ int main(void) {
 
     int running = 1, paused = 0;
     SDL_Event event;
-    int gravity_enabled = 0;
+    int gravity_enabled = 1;
+    int dynamic_lighting = 1;
 
     const float WALK_SPEED       = 4.317f;
     const float SPRINT_SPEED     = 5.612f;
@@ -426,11 +427,17 @@ int main(void) {
                 float bx = ((float)screen_w - bw) * 0.5f;
                 float by = ((float)screen_h - bh) * 0.5f;
                 float gby = by + 84.0f;
+                float lby = by + 168.0f;
                 if (point_in_rect(event.button.x, event.button.y, bx, by, bw, bh)) {
                     paused = 0; SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click = 1;
                 } else if (point_in_rect(event.button.x, event.button.y, bx, gby, bw, bh)) {
                     gravity_enabled = !gravity_enabled;
                     if (!gravity_enabled) vel_y = 0.0f;
+                } else if (point_in_rect(event.button.x, event.button.y, bx, lby, bw, bh)) {
+                    dynamic_lighting = !dynamic_lighting;
+                    world->dynamic_lighting = dynamic_lighting;
+                    for (int ri = 0; ri < WORLD_SLOTS; ri++)
+                        if (world->slots[ri].loaded) world->slots[ri].mesh_valid = 0;
                 }
             } else if (!paused && event.type == SDL_MOUSEBUTTONDOWN) {
                 if (event.button.button == SDL_BUTTON_LEFT)       break_requested = 1;
@@ -670,6 +677,11 @@ int main(void) {
             glBindBuffer(GL_ARRAY_BUFFER, buttonVBO);
             glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(gbverts), gbverts);
             glDrawArrays(GL_TRIANGLES, 0, 6);
+            float lby=by+168.0f;
+            float lbverts[24] = {bx,lby,0,0, bx+bw,lby,1,0, bx+bw,lby+bh,1,1, bx,lby,0,0, bx+bw,lby+bh,1,1, bx,lby+bh,0,1};
+            glBindBuffer(GL_ARRAY_BUFFER, buttonVBO);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(lbverts), lbverts);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
 
             glUseProgram(uiProgram); glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER, uiVBO);
             float tverts[8192]; int tc = 0;
@@ -683,10 +695,19 @@ int main(void) {
             glDrawArrays(GL_TRIANGLES, 0, tc/2);
 
             tc = 0;
-            const char* glbl = gravity_enabled ? "gravity on" : "toggle gravity";
+            const char* glbl = gravity_enabled ? "gravity on" : "gravity off";
             tw = 0.0f;
             for (const char* ch = glbl; *ch; ++ch) tw += (*ch==' ') ? 4.0f*ts : 6.0f*ts;
             build_text_vertices(glbl, bx+(bw-tw)*0.5f, gby+(bh-7.0f*ts)*0.5f, ts, tverts, &tc);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*tc, tverts);
+            glUniform4f(glGetUniformLocation(uiProgram,"uColor"),0.15f,0.15f,0.15f,1.0f);
+            glDrawArrays(GL_TRIANGLES, 0, tc/2);
+
+            tc = 0;
+            const char* llbl = dynamic_lighting ? "lighting dynamic" : "lighting flat";
+            tw = 0.0f;
+            for (const char* ch = llbl; *ch; ++ch) tw += (*ch==' ') ? 4.0f*ts : 6.0f*ts;
+            build_text_vertices(llbl, bx+(bw-tw)*0.5f, lby+(bh-7.0f*ts)*0.5f, ts, tverts, &tc);
             glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*tc, tverts);
             glUniform4f(glGetUniformLocation(uiProgram,"uColor"),0.15f,0.15f,0.15f,1.0f);
             glDrawArrays(GL_TRIANGLES, 0, tc/2);

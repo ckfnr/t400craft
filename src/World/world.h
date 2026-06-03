@@ -20,6 +20,7 @@ typedef struct {
     int center_cx;
     int center_cz;
     char save_dir[256];
+    int dynamic_lighting;
 } World;
 
 void world_init(World* world, int center_cx, int center_cz, const char* save_dir);

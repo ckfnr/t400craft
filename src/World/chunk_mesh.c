@@ -18,58 +18,61 @@ static int block_face_texture_layer(BlockType type, int face) {
     }
 }
 
-static int has_sky_access(Chunk* chunk, int x, int y, int z) {
-    for (int cy = y + 1; cy < CHUNK_SIZE_Y; cy++) {
-        Block* b = chunk_get_block(chunk, x, cy, z);
-        if (b && b->type != BLOCK_AIR) return 0;
-    }
-    return 1;
+static float get_block_light(Chunk* chunk, int x, int y, int z) {
+    if (x < 0 || x >= CHUNK_SIZE_X || y < 0 || y >= CHUNK_SIZE_Y || z < 0 || z >= CHUNK_SIZE_Z)
+        return 1.0f;
+    if (chunk->blocks[x][y][z].type != BLOCK_AIR)
+        return 0.0f;
+    Block* above = chunk_get_block(chunk, x, y + 1, z);
+    if (above == NULL || above->type == BLOCK_AIR)
+        return 1.0f;
+    return 0.15f;
 }
 
 static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
-                     float x, float y, float z, int face, BlockType type, int sky) {
-    float face_bright[] = {1.0f, 0.4f, 0.8f, 0.8f, 0.6f, 0.6f};
-    float b = face_bright[face];
-    if (!sky) b *= 0.05f;
+                     float x, float y, float z, int face, BlockType type,
+                     float light, int dynamic) {
+    float face_dim[] = {1.0f, 0.5f, 0.8f, 0.8f, 0.6f, 0.6f};
+    float b = dynamic ? (light * face_dim[face]) : face_dim[face];
     float layer = (float)block_face_texture_layer(type, face);
 
     float positions[4][3];
     switch (face) {
         case 0:
-            positions[0][0]=x;     positions[0][1]=y+1; positions[0][2]=z+1;
-            positions[1][0]=x+1;   positions[1][1]=y+1; positions[1][2]=z+1;
-            positions[2][0]=x+1;   positions[2][1]=y+1; positions[2][2]=z;
-            positions[3][0]=x;     positions[3][1]=y+1; positions[3][2]=z;
+            positions[0][0]=x;   positions[0][1]=y+1; positions[0][2]=z+1;
+            positions[1][0]=x+1; positions[1][1]=y+1; positions[1][2]=z+1;
+            positions[2][0]=x+1; positions[2][1]=y+1; positions[2][2]=z;
+            positions[3][0]=x;   positions[3][1]=y+1; positions[3][2]=z;
             break;
         case 1:
-            positions[0][0]=x;     positions[0][1]=y;   positions[0][2]=z;
-            positions[1][0]=x+1;   positions[1][1]=y;   positions[1][2]=z;
-            positions[2][0]=x+1;   positions[2][1]=y;   positions[2][2]=z+1;
-            positions[3][0]=x;     positions[3][1]=y;   positions[3][2]=z+1;
+            positions[0][0]=x;   positions[0][1]=y;   positions[0][2]=z;
+            positions[1][0]=x+1; positions[1][1]=y;   positions[1][2]=z;
+            positions[2][0]=x+1; positions[2][1]=y;   positions[2][2]=z+1;
+            positions[3][0]=x;   positions[3][1]=y;   positions[3][2]=z+1;
             break;
         case 2:
-            positions[0][0]=x;     positions[0][1]=y;   positions[0][2]=z+1;
-            positions[1][0]=x+1;   positions[1][1]=y;   positions[1][2]=z+1;
-            positions[2][0]=x+1;   positions[2][1]=y+1; positions[2][2]=z+1;
-            positions[3][0]=x;     positions[3][1]=y+1; positions[3][2]=z+1;
+            positions[0][0]=x;   positions[0][1]=y;   positions[0][2]=z+1;
+            positions[1][0]=x+1; positions[1][1]=y;   positions[1][2]=z+1;
+            positions[2][0]=x+1; positions[2][1]=y+1; positions[2][2]=z+1;
+            positions[3][0]=x;   positions[3][1]=y+1; positions[3][2]=z+1;
             break;
         case 3:
-            positions[0][0]=x+1;   positions[0][1]=y;   positions[0][2]=z;
-            positions[1][0]=x;     positions[1][1]=y;   positions[1][2]=z;
-            positions[2][0]=x;     positions[2][1]=y+1; positions[2][2]=z;
-            positions[3][0]=x+1;   positions[3][1]=y+1; positions[3][2]=z;
+            positions[0][0]=x+1; positions[0][1]=y;   positions[0][2]=z;
+            positions[1][0]=x;   positions[1][1]=y;   positions[1][2]=z;
+            positions[2][0]=x;   positions[2][1]=y+1; positions[2][2]=z;
+            positions[3][0]=x+1; positions[3][1]=y+1; positions[3][2]=z;
             break;
         case 4:
-            positions[0][0]=x;     positions[0][1]=y;   positions[0][2]=z;
-            positions[1][0]=x;     positions[1][1]=y;   positions[1][2]=z+1;
-            positions[2][0]=x;     positions[2][1]=y+1; positions[2][2]=z+1;
-            positions[3][0]=x;     positions[3][1]=y+1; positions[3][2]=z;
+            positions[0][0]=x;   positions[0][1]=y;   positions[0][2]=z;
+            positions[1][0]=x;   positions[1][1]=y;   positions[1][2]=z+1;
+            positions[2][0]=x;   positions[2][1]=y+1; positions[2][2]=z+1;
+            positions[3][0]=x;   positions[3][1]=y+1; positions[3][2]=z;
             break;
         default:
-            positions[0][0]=x+1;   positions[0][1]=y;   positions[0][2]=z+1;
-            positions[1][0]=x+1;   positions[1][1]=y;   positions[1][2]=z;
-            positions[2][0]=x+1;   positions[2][1]=y+1; positions[2][2]=z;
-            positions[3][0]=x+1;   positions[3][1]=y+1; positions[3][2]=z+1;
+            positions[0][0]=x+1; positions[0][1]=y;   positions[0][2]=z+1;
+            positions[1][0]=x+1; positions[1][1]=y;   positions[1][2]=z;
+            positions[2][0]=x+1; positions[2][1]=y+1; positions[2][2]=z;
+            positions[3][0]=x+1; positions[3][1]=y+1; positions[3][2]=z+1;
             break;
     }
 
@@ -94,7 +97,7 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
     inds[(*ic)++] = base+0; inds[(*ic)++] = base+2; inds[(*ic)++] = base+3;
 }
 
-Mesh chunk_build_mesh(Chunk* chunk) {
+Mesh chunk_build_mesh_dynamic(Chunk* chunk, int dynamic) {
     GLfloat* verts = malloc(MAX_VERTICES * 9 * sizeof(GLfloat));
     GLuint*  inds  = malloc(MAX_INDICES  * sizeof(GLuint));
     int vc = 0, ic = 0;
@@ -108,15 +111,14 @@ Mesh chunk_build_mesh(Chunk* chunk) {
             for (int z = 0; z < CHUNK_SIZE_Z; z++) {
                 if (chunk->blocks[x][y][z].type == BLOCK_AIR) continue;
                 BlockType type = chunk->blocks[x][y][z].type;
-                int sky = has_sky_access(chunk, x, y, z);
                 for (int face = 0; face < 6; face++) {
                     int nx = x + dx[face];
                     int ny = y + dy[face];
                     int nz = z + dz[face];
                     Block* neighbor = chunk_get_block(chunk, nx, ny, nz);
-                    if (neighbor == NULL || neighbor->type == BLOCK_AIR) {
-                        add_face(verts, inds, &vc, &ic, (float)x, (float)y, (float)z, face, type, sky);
-                    }
+                    if (neighbor != NULL && neighbor->type != BLOCK_AIR) continue;
+                    float light = get_block_light(chunk, nx, ny, nz);
+                    add_face(verts, inds, &vc, &ic, (float)x, (float)y, (float)z, face, type, light, dynamic);
                 }
             }
         }
@@ -126,4 +128,8 @@ Mesh chunk_build_mesh(Chunk* chunk) {
     free(verts);
     free(inds);
     return m;
+}
+
+Mesh chunk_build_mesh(Chunk* chunk) {
+    return chunk_build_mesh_dynamic(chunk, 1);
 }

@@ -5,5 +5,6 @@
 #include "../Mesh/mesh.h"
 
 Mesh chunk_build_mesh(Chunk* chunk);
+Mesh chunk_build_mesh_dynamic(Chunk* chunk, int dynamic);
 
 #endif
