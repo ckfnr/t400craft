@@ -1,17 +1,15 @@
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aColor;
-layout (location = 2) in vec2 aTexCoord;
-layout (location = 3) in float aTexLayer;
-
-out vec3 color;
-out vec2 texCoord;
-out float texLayer;
-out float fog_depth;
-
+#version 120
+#extension GL_EXT_texture_array : enable
+attribute vec3 aPos;
+attribute vec3 aColor;
+attribute vec2 aTexCoord;
+attribute float aTexLayer;
+varying vec3 color;
+varying vec2 texCoord;
+varying float texLayer;
+varying float fog_depth;
 uniform mat4 camMatrix;
 uniform mat4 model;
-
 void main()
 {
     gl_Position = camMatrix * model * vec4(aPos, 1.0);

@@ -1,7 +1,6 @@
 #include "chunk_mesh.h"
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
 
 #define MAX_VERTICES (CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z * 6 * 4)
 #define MAX_INDICES  (CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z * 6 * 6)
@@ -23,11 +22,11 @@ static int block_face_texture_layer(BlockType type, int face) {
 
 typedef struct { short x, y, z; } LightNode;
 
-static void build_lightmap(Chunk* chunk,
+static LightNode bfs_queue[CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z * 2];
+
+static void build_lightmap(Chunk* chunk, Chunk* neighbors[4],
                             uint8_t light[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z]) {
     memset(light, 0, CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z);
-
-    LightNode* queue = malloc(sizeof(LightNode) * CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z);
     int head = 0, tail = 0;
 
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
@@ -35,76 +34,81 @@ static void build_lightmap(Chunk* chunk,
             for (int y = CHUNK_SIZE_Y - 1; y >= 0; y--) {
                 if (chunk->blocks[x][y][z].type != BLOCK_AIR) break;
                 light[x][y][z] = MAX_LIGHT;
-                queue[tail++] = (LightNode){(short)x, (short)y, (short)z};
+                bfs_queue[tail++] = (LightNode){(short)x, (short)y, (short)z};
             }
         }
     }
 
-    int dx[] = {1,-1, 0, 0, 0, 0};
-    int dy[] = {0, 0, 1,-1, 0, 0};
-    int dz[] = {0, 0, 0, 0, 1,-1};
+    static const int dx[] = {1,-1, 0, 0, 0, 0};
+    static const int dy[] = {0, 0, 1,-1, 0, 0};
+    static const int dz[] = {0, 0, 0, 0, 1,-1};
 
     while (head < tail) {
-        LightNode n = queue[head++];
+        LightNode n = bfs_queue[head++];
         int lv = light[n.x][n.y][n.z];
         if (lv <= 1) continue;
         for (int d = 0; d < 6; d++) {
-            int nx = n.x + dx[d];
-            int ny = n.y + dy[d];
-            int nz = n.z + dz[d];
-            if (nx < 0 || nx >= CHUNK_SIZE_X) continue;
+            int nx = n.x + dx[d], ny = n.y + dy[d], nz = n.z + dz[d];
             if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
-            if (nz < 0 || nz >= CHUNK_SIZE_Z) continue;
-            if (chunk->blocks[nx][ny][nz].type != BLOCK_AIR) continue;
-            if (light[nx][ny][nz] >= lv - 1) continue;
-            light[nx][ny][nz] = (uint8_t)(lv - 1);
-            queue[tail++] = (LightNode){(short)nx, (short)ny, (short)nz};
+            if (nx >= 0 && nx < CHUNK_SIZE_X && nz >= 0 && nz < CHUNK_SIZE_Z) {
+                if (chunk->blocks[nx][ny][nz].type != BLOCK_AIR) continue;
+                if (light[nx][ny][nz] >= lv - 1) continue;
+                light[nx][ny][nz] = (uint8_t)(lv - 1);
+                bfs_queue[tail++] = (LightNode){(short)nx, (short)ny, (short)nz};
+            } else {
+                int ni = -1, lx = nx, lz = nz;
+                if      (nx < 0)             { ni = 0; lx = nx + CHUNK_SIZE_X; }
+                else if (nx >= CHUNK_SIZE_X) { ni = 1; lx = nx - CHUNK_SIZE_X; }
+                else if (nz < 0)             { ni = 2; lz = nz + CHUNK_SIZE_Z; }
+                else if (nz >= CHUNK_SIZE_Z) { ni = 3; lz = nz - CHUNK_SIZE_Z; }
+                if (ni < 0 || !neighbors[ni]) continue;
+                Block* nb = chunk_get_block(neighbors[ni], lx, ny, lz);
+                if (!nb || nb->type != BLOCK_AIR) continue;
+            }
         }
     }
-
-    free(queue);
+    (void)neighbors;
 }
 
 static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
-                     float x, float y, float z, int face, BlockType type,
-                     float light) {
-    float face_dim[] = {1.0f, 0.6f, 0.8f, 0.8f, 0.7f, 0.7f};
+                     float x, float y, float z, int face, BlockType type, float light) {
+    static const float face_dim[] = {1.0f, 0.6f, 0.8f, 0.8f, 0.7f, 0.7f};
     float b = light * face_dim[face];
-
     float layer = (float)block_face_texture_layer(type, face);
+
     float positions[4][3];
     switch (face) {
-        case 0:
+        case 0: /* +Y top    — normal +Y: cross(+X,−Z)=+Y */
             positions[0][0]=x;   positions[0][1]=y+1; positions[0][2]=z+1;
             positions[1][0]=x+1; positions[1][1]=y+1; positions[1][2]=z+1;
             positions[2][0]=x+1; positions[2][1]=y+1; positions[2][2]=z;
             positions[3][0]=x;   positions[3][1]=y+1; positions[3][2]=z;
             break;
-        case 1:
-            positions[0][0]=x;   positions[0][1]=y;   positions[0][2]=z;
-            positions[1][0]=x+1; positions[1][1]=y;   positions[1][2]=z;
-            positions[2][0]=x+1; positions[2][1]=y;   positions[2][2]=z+1;
-            positions[3][0]=x;   positions[3][1]=y;   positions[3][2]=z+1;
+        case 1: /* −Y bottom — normal −Y: cross(+X,+Z)=−Y */
+            positions[0][0]=x;   positions[0][1]=y; positions[0][2]=z;
+            positions[1][0]=x+1; positions[1][1]=y; positions[1][2]=z;
+            positions[2][0]=x+1; positions[2][1]=y; positions[2][2]=z+1;
+            positions[3][0]=x;   positions[3][1]=y; positions[3][2]=z+1;
             break;
-        case 2:
+        case 2: /* +Z front  — normal +Z: cross(+X,+Y)=+Z */
             positions[0][0]=x;   positions[0][1]=y;   positions[0][2]=z+1;
             positions[1][0]=x+1; positions[1][1]=y;   positions[1][2]=z+1;
             positions[2][0]=x+1; positions[2][1]=y+1; positions[2][2]=z+1;
             positions[3][0]=x;   positions[3][1]=y+1; positions[3][2]=z+1;
             break;
-        case 3:
+        case 3: /* −Z back   — normal −Z: cross(−X,+Y)=−Z */
             positions[0][0]=x+1; positions[0][1]=y;   positions[0][2]=z;
             positions[1][0]=x;   positions[1][1]=y;   positions[1][2]=z;
             positions[2][0]=x;   positions[2][1]=y+1; positions[2][2]=z;
             positions[3][0]=x+1; positions[3][1]=y+1; positions[3][2]=z;
             break;
-        case 4:
-            positions[0][0]=x;   positions[0][1]=y;   positions[0][2]=z;
-            positions[1][0]=x;   positions[1][1]=y;   positions[1][2]=z+1;
-            positions[2][0]=x;   positions[2][1]=y+1; positions[2][2]=z+1;
-            positions[3][0]=x;   positions[3][1]=y+1; positions[3][2]=z;
+        case 4: /* −X left   — normal −X: cross(+Z,+Y)=−X */
+            positions[0][0]=x; positions[0][1]=y;   positions[0][2]=z;
+            positions[1][0]=x; positions[1][1]=y;   positions[1][2]=z+1;
+            positions[2][0]=x; positions[2][1]=y+1; positions[2][2]=z+1;
+            positions[3][0]=x; positions[3][1]=y+1; positions[3][2]=z;
             break;
-        default:
+        default: /* +X right  — normal +X: cross(−Z,+Y)=+X — confirmed from original */
             positions[0][0]=x+1; positions[0][1]=y;   positions[0][2]=z+1;
             positions[1][0]=x+1; positions[1][1]=y;   positions[1][2]=z;
             positions[2][0]=x+1; positions[2][1]=y+1; positions[2][2]=z;
@@ -133,22 +137,28 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
     inds[(*ic)++] = base+0; inds[(*ic)++] = base+2; inds[(*ic)++] = base+3;
 }
 
-Mesh chunk_build_mesh_dynamic(Chunk* chunk, int dynamic) {
-    uint8_t (*light)[CHUNK_SIZE_Y][CHUNK_SIZE_Z] =
-        malloc(sizeof(uint8_t) * CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z);
+Mesh chunk_build_mesh_with_neighbors(Chunk* chunk, Chunk* neighbors[4], int dynamic) {
+    static uint8_t light[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
 
-    if (dynamic)
-        build_lightmap(chunk, light);
-    else
-        memset(light, MAX_LIGHT, CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z);
+    if (dynamic) {
+        Chunk* null_neighbors[4] = {NULL,NULL,NULL,NULL};
+        build_lightmap(chunk, neighbors ? neighbors : null_neighbors, light);
+    } else {
+        memset(light, MAX_LIGHT, sizeof(light));
+    }
 
     GLfloat* verts = malloc(MAX_VERTICES * 9 * sizeof(GLfloat));
     GLuint*  inds  = malloc(MAX_INDICES  * sizeof(GLuint));
     int vc = 0, ic = 0;
 
-    int dx[] = {0, 0, 0, 0, -1, 1};
-    int dy[] = {1,-1, 0, 0,  0, 0};
-    int dz[] = {0, 0, 1,-1,  0, 0};
+    static const int dx[] = {0, 0, 0, 0, -1, 1};
+    static const int dy[] = {1,-1, 0, 0,  0, 0};
+    static const int dz[] = {0, 0, 1,-1,  0, 0};
+
+    static const float light_table[16] = {
+        0.30f, 0.35f, 0.40f, 0.45f, 0.50f, 0.55f, 0.60f, 0.65f,
+        0.70f, 0.75f, 0.80f, 0.85f, 0.90f, 0.94f, 0.97f, 1.00f
+    };
 
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
         for (int y = 0; y < CHUNK_SIZE_Y; y++) {
@@ -161,36 +171,29 @@ Mesh chunk_build_mesh_dynamic(Chunk* chunk, int dynamic) {
                     int nz = z + dz[face];
                     Block* neighbor = chunk_get_block(chunk, nx, ny, nz);
                     if (neighbor != NULL && neighbor->type != BLOCK_AIR) continue;
-                    uint8_t lv = 0;
+                    uint8_t lv;
                     if (nx >= 0 && nx < CHUNK_SIZE_X &&
                         ny >= 0 && ny < CHUNK_SIZE_Y &&
-                        nz >= 0 && nz < CHUNK_SIZE_Z)
+                        nz >= 0 && nz < CHUNK_SIZE_Z) {
                         lv = light[nx][ny][nz];
-                    else
+                    } else {
                         lv = MAX_LIGHT;
-
-                    static const float light_table[16] = {
-                        0.40f, 0.44f, 0.48f, 0.52f,
-                        0.56f, 0.60f, 0.64f, 0.68f,
-                        0.72f, 0.76f, 0.80f, 0.84f,
-                        0.88f, 0.92f, 0.96f, 1.00f
-                    };
-
-                    float lf = light_table[lv];
-
+                    }
                     add_face(verts, inds, &vc, &ic,
-                            (float)x, (float)y, (float)z,
-                            face, type, lf);
+                             (float)x, (float)y, (float)z,
+                             face, type, light_table[lv]);
                 }
             }
         }
     }
 
     Mesh m = mesh_create(verts, vc * 9 * sizeof(GLfloat), inds, ic * sizeof(GLuint));
-    free(light);
-    free(verts);
-    free(inds);
+    free(verts); free(inds);
     return m;
+}
+
+Mesh chunk_build_mesh_dynamic(Chunk* chunk, int dynamic) {
+    return chunk_build_mesh_with_neighbors(chunk, NULL, dynamic);
 }
 
 Mesh chunk_build_mesh(Chunk* chunk) {

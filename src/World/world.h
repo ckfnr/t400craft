@@ -4,7 +4,7 @@
 #include "chunk.h"
 #include "../Mesh/mesh.h"
 
-#define WORLD_RADIUS 6
+#define WORLD_RADIUS 4
 #define WORLD_DIAMETER (WORLD_RADIUS * 2 + 1)
 #define WORLD_SLOTS (WORLD_DIAMETER * WORLD_DIAMETER)
 
