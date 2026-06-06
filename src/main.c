@@ -445,13 +445,12 @@ int main(void) {
     int running = 1, paused = 0;
     SDL_Event event;
     int gravity_enabled = 1;
-    int dynamic_lighting = 0; /* flat lighting default — sneller op T400 */
+    int dynamic_lighting = 0;
 
-    const float WALK_SPEED=4.317f, SPRINT_SPEED=5.612f, CROUCH_SPEED=1.31f;
+    const float WALK_SPEED=4.317f, SPRINT_SPEED=7.5f, CROUCH_SPEED=1.31f;
     const float FLY_SPEED=10.92f, FLY_SPRINT_SPEED=21.6f;
-    const float GRAVITY=28.0f, JUMP_IMPULSE=9.5f, FLOOR_Y=-4.0f;
+    const float GRAVITY=28.0f, JUMP_IMPULSE=8.9f, FLOOR_Y=-4.0f;
     const float HFRICTION_PS=0.03f, AIR_ACCEL_FRAC=0.2f;
-    const Uint32 JUMP_BUFFER_MS=120;
     const float STAND_HEIGHT=1.8f, CROUCH_HEIGHT=1.35f;
     const float STAND_EYE=1.62f, CROUCH_EYE=1.27f;
     const float FOG_START=3.0f*16.0f, FOG_END=4.5f*16.0f;
@@ -478,7 +477,7 @@ int main(void) {
                 else { SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click = 1; }
             } else if (!paused && event.type == SDL_KEYDOWN && event.key.repeat == 0
                        && event.key.keysym.sym == SDLK_SPACE && gravity_enabled) {
-                (void)0; /* auto-jump via keyboard state below */
+                (void)0;
             } else if (paused && event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
                 int sw=0, sh=0; SDL_GL_GetDrawableSize(window, &sw, &sh);
                 float bw=280.0f, bh=64.0f;
@@ -510,7 +509,6 @@ int main(void) {
         int cz_player = (int)floorf(cam.position[2] / CHUNK_SIZE_Z);
         world_update_center(world, cx_player, cz_player);
 
-        /* Max 1 Mesh-Rebuild pro Frame — verhindert Frame-Stall */
         {
             int rebuilt = 0;
             for (int i = 0; i < WORLD_SLOTS && rebuilt < 1; i++) {
@@ -543,7 +541,6 @@ int main(void) {
             fps_count=0; fps_timer=0.0f;
         }
 
-        /* Rechte Maustaste halten: Rate-limitiertes Platzieren */
         place_timer += dt;
         if (mouse_right_held && place_timer >= 0.2f) {
             place_requested = 1;
@@ -631,7 +628,6 @@ int main(void) {
             camera_update(&cam, 45.0f, 0.1f, 1000.0f);
             cam.position[1] = real_y;
 
-            /* Uniforms mit gecachten Locations setzen */
             glUniformMatrix4fv(u_camMatrix, 1, GL_FALSE, (float*)cam.camera_matrix);
             glUniformMatrix4fv(u_view,      1, GL_FALSE, (float*)cam.view);
             glUniformMatrix4fv(u_proj,      1, GL_FALSE, (float*)cam.proj);
@@ -642,7 +638,6 @@ int main(void) {
             glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
             glUniform1i(u_tex0, 0);
 
-            /* Frustum-Culling */
             FPlane frustum[6];
             extract_frustum(cam.camera_matrix, frustum);
 
