@@ -151,7 +151,6 @@ typedef struct {
     int place_x, place_y, place_z;
 } BlockSelection;
 
-/* Frustum culling — Gribb/Hartmann method, cglm column-major mat4 */
 typedef struct { float x, y, z, w; } FPlane;
 static void extract_frustum(mat4 m, FPlane p[6]) {
     p[0] = (FPlane){m[0][3]+m[0][0], m[1][3]+m[1][0], m[2][3]+m[2][0], m[3][3]+m[3][0]};
@@ -291,7 +290,6 @@ int main(void) {
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
 
-    /* Uniform locations gecacht — kein glGetUniformLocation im Render-Loop */
     GLint u_camMatrix  = glGetUniformLocation(shaderProgram, "camMatrix");
     GLint u_view       = glGetUniformLocation(shaderProgram, "view");
     GLint u_proj       = glGetUniformLocation(shaderProgram, "proj");
