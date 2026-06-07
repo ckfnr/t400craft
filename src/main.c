@@ -416,11 +416,14 @@ int main(void) {
     const char* hotbar_tex_paths[9] = {
         "src/textures/cobblestone.png",
         "src/textures/oak_planks.png",
-        NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+        "src/textures/grass_side.png",
+        "src/textures/dirtblock.png",
+        NULL, NULL, NULL, NULL, NULL,
     };
     const BlockType hotbar_blocks[9] = {
         BLOCK_COBBLESTONE, BLOCK_OAK_PLANKS,
-        BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR,
+        BLOCK_GRASS, BLOCK_DIRT,
+        BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR,
     };
     GLuint hotbar_textures[9] = {0};
     for (int i = 0; i < 9; i++) {
@@ -472,7 +475,6 @@ int main(void) {
     int running = 1, paused = 0;
     SDL_Event event;
     int gravity_enabled = 1;
-    int dynamic_lighting = 0;
 
     const float WALK_SPEED=4.317f, SPRINT_SPEED=7.5f, CROUCH_SPEED=1.31f;
     const float FLY_SPEED=10.92f, FLY_SPRINT_SPEED=21.6f;
@@ -516,19 +518,11 @@ int main(void) {
                 int sw=0, sh=0; SDL_GL_GetDrawableSize(window, &sw, &sh);
                 float bw=280.0f, bh=64.0f;
                 float bx=((float)sw-bw)*0.5f, by=((float)sh-bh)*0.5f;
-                float gby=by+84.0f, lby=by+168.0f;
+                float gby=by+84.0f;
                 if (point_in_rect(event.button.x, event.button.y, bx, by, bw, bh)) {
                     paused=0; SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click=1;
                 } else if (point_in_rect(event.button.x, event.button.y, bx, gby, bw, bh)) {
                     gravity_enabled=!gravity_enabled; if(!gravity_enabled) vel_y=0.0f;
-                } else if (point_in_rect(event.button.x, event.button.y, bx, lby, bw, bh)) {
-                    dynamic_lighting=!dynamic_lighting;
-                    world->dynamic_lighting=dynamic_lighting;
-                    for(int ri=0;ri<WORLD_SLOTS;ri++)
-                        if(world->slots[ri].loaded) {
-                            world->slots[ri].mesh_dirty=1;
-                            world->slots[ri].lightmap_valid=0;
-                        }
                 }
             } else if (!paused && event.type == SDL_MOUSEBUTTONDOWN) {
                 if (event.button.button == SDL_BUTTON_LEFT)       break_requested=1;
@@ -837,13 +831,13 @@ int main(void) {
             glUniform4f(u_ui_color,0.35f,0.35f,0.35f,0.65f);
             glDrawArrays(GL_TRIANGLES,0,6);
 
-            float bw=280,bh=64,bx=((float)screen_w-bw)*0.5f,by=((float)screen_h-bh)*0.5f,gby=by+84,lby=by+168;
+            float bw=280,bh=64,bx=((float)screen_w-bw)*0.5f,by=((float)screen_h-bh)*0.5f,gby=by+84;
             glUseProgram(buttonProgram); glBindVertexArray(buttonVAO); glBindBuffer(GL_ARRAY_BUFFER,buttonVBO);
             glUniform2f(u_btn_screenSize,(float)screen_w,(float)screen_h);
             glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D,buttonTexture);
             glUniform1i(u_btn_tex,1);
-            float boffsets[]={0,84,168};
-            for(int b=0;b<3;b++){
+            float boffsets[]={0,84};
+            for(int b=0;b<2;b++){
                 float by2=by+boffsets[b];
                 float bv[24]={bx,by2,0,0, bx+bw,by2,1,0, bx+bw,by2+bh,1,1, bx,by2,0,0, bx+bw,by2+bh,1,1, bx,by2+bh,0,1};
                 glBufferSubData(GL_ARRAY_BUFFER,0,sizeof(bv),bv);
@@ -853,10 +847,9 @@ int main(void) {
             glUseProgram(uiProgram); glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER,uiVBO);
             float tverts[32768]; int tc=0; float ts=2.2f;
             const char* lbls[]={ "continue playing",
-                                  gravity_enabled?"gravity on":"gravity off",
-                                  dynamic_lighting?"lighting dynamic":"lighting flat" };
-            float ypos[]={by,gby,lby};
-            for(int b=0;b<3;b++){
+                                  gravity_enabled?"gravity on":"gravity off" };
+            float ypos[]={by,gby};
+            for(int b=0;b<2;b++){
                 tc=0; float tw=0;
                 for(const char* ch=lbls[b];*ch;++ch) tw+=(*ch==' ')?4.0f*ts:6.0f*ts;
                 build_text_vertices(lbls[b],bx+(bw-tw)*0.5f,ypos[b]+(bh-7*ts)*0.5f,ts,tverts,&tc);
