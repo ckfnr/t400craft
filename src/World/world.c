@@ -27,6 +27,8 @@ static void load_or_generate(World* world, int slot_idx, int cx, int cz) {
     s->chunk.dirty = 0;
     s->loaded = 1;
     s->mesh_valid = 0;
+    s->mesh_dirty = 0;
+    s->lightmap_valid = 0;
 
     char path[512];
     save_path(world, cx, cz, path, sizeof(path));
@@ -218,6 +220,15 @@ int world_set_block(World* world, int wx, int wy, int wz, BlockType type) {
     if (!b) return 0;
     b->type = type;
     c->dirty = 1;
+    for (int dz2 = -1; dz2 <= 1; dz2++) {
+        for (int dx2 = -1; dx2 <= 1; dx2++) {
+            WorldSlot* s = world_get_slot(world, cx + dx2, cz + dz2);
+            if (s) {
+                s->lightmap_valid = 0;
+                s->mesh_dirty = 1;
+            }
+        }
+    }
     world_rebuild_mesh(world, cx, cz);
     return 1;
 }
@@ -225,7 +236,37 @@ int world_set_block(World* world, int wx, int wy, int wz, BlockType type) {
 void world_rebuild_mesh(World* world, int cx, int cz) {
     WorldSlot* s = world_get_slot(world, cx, cz);
     if (!s) return;
+    WorldSlot* nb[4] = {
+        world_get_slot(world, cx - 1, cz),
+        world_get_slot(world, cx + 1, cz),
+        world_get_slot(world, cx,     cz - 1),
+        world_get_slot(world, cx,     cz + 1),
+    };
+    Chunk* nchunks[4] = {
+        nb[0] ? &nb[0]->chunk : NULL,
+        nb[1] ? &nb[1]->chunk : NULL,
+        nb[2] ? &nb[2]->chunk : NULL,
+        nb[3] ? &nb[3]->chunk : NULL,
+    };
+    if (world->dynamic_lighting) {
+        chunk_compute_lightmap(&s->chunk, s->lightmap);
+        s->lightmap_valid = 1;
+        for (int i = 0; i < 4; i++) {
+            if (nb[i] && (!nb[i]->lightmap_valid || nb[i]->mesh_dirty)) {
+                chunk_compute_lightmap(&nb[i]->chunk, nb[i]->lightmap);
+                nb[i]->lightmap_valid = 1;
+            }
+        }
+    }
+    Mesh new_mesh = world->dynamic_lighting
+        ? chunk_build_mesh_with_cached_neighbors(&s->chunk, nchunks,
+            nb[0] ? (uint8_t*)nb[0]->lightmap : NULL,
+            nb[1] ? (uint8_t*)nb[1]->lightmap : NULL,
+            nb[2] ? (uint8_t*)nb[2]->lightmap : NULL,
+            nb[3] ? (uint8_t*)nb[3]->lightmap : NULL, 1)
+        : chunk_build_mesh_with_neighbors(&s->chunk, nchunks, 0);
     if (s->mesh_valid) mesh_delete(&s->mesh);
-    s->mesh = chunk_build_mesh_dynamic(&s->chunk, world->dynamic_lighting);
+    s->mesh = new_mesh;
     s->mesh_valid = 1;
+    s->mesh_dirty = 0;
 }

@@ -3,6 +3,7 @@
 
 #include "chunk.h"
 #include "../Mesh/mesh.h"
+#include <stdint.h>
 
 #define WORLD_RADIUS 4
 #define WORLD_DIAMETER (WORLD_RADIUS * 2 + 1)
@@ -13,6 +14,9 @@ typedef struct {
     Mesh   mesh;
     int    loaded;
     int    mesh_valid;
+    int    mesh_dirty;
+    uint8_t lightmap[16][128][16];
+    int    lightmap_valid;
 } WorldSlot;
 
 typedef struct {

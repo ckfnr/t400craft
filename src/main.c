@@ -385,8 +385,9 @@ int main(void) {
         "src/textures/grass_side.png",
         "src/textures/grass_top.png",
         "src/textures/cobblestone.png",
+        "src/textures/oak_planks.png",
     };
-    GLuint texture = load_texture_array(world_textures, 4);
+    GLuint texture = load_texture_array(world_textures, 5);
 
     int buttonW, buttonH, buttonCh;
     unsigned char* buttonBytes = stbi_load("src/UI/button.png", &buttonW, &buttonH, &buttonCh, 4);
@@ -411,6 +412,34 @@ int main(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, crossW, crossH, 0, GL_RGBA, GL_UNSIGNED_BYTE, crossBytes);
     stbi_image_free(crossBytes); glBindTexture(GL_TEXTURE_2D, 0);
+
+    const char* hotbar_tex_paths[9] = {
+        "src/textures/cobblestone.png",
+        "src/textures/oak_planks.png",
+        NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    };
+    const BlockType hotbar_blocks[9] = {
+        BLOCK_COBBLESTONE, BLOCK_OAK_PLANKS,
+        BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR,
+    };
+    GLuint hotbar_textures[9] = {0};
+    for (int i = 0; i < 9; i++) {
+        if (!hotbar_tex_paths[i]) continue;
+        int hw2, hh2, hch2;
+        unsigned char* hb = stbi_load(hotbar_tex_paths[i], &hw2, &hh2, &hch2, 4);
+        if (!hb) continue;
+        glGenTextures(1, &hotbar_textures[i]);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, hotbar_textures[i]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, hw2, hh2, 0, GL_RGBA, GL_UNSIGNED_BYTE, hb);
+        stbi_image_free(hb);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    int selected_slot = 0;
 
     int spawn_wx = 8, spawn_wz = 8, spawn_y = 85;
     {
@@ -469,6 +498,13 @@ int main(void) {
             if (event.type == SDL_QUIT) running = 0;
             if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_F3)
                 show_fps = !show_fps;
+            if (event.type == SDL_MOUSEWHEEL && !paused) {
+                selected_slot = (selected_slot - event.wheel.y % 9 + 9) % 9;
+            }
+            if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && !paused) {
+                SDL_Keycode k = event.key.keysym.sym;
+                if (k >= SDLK_1 && k <= SDLK_9) selected_slot = k - SDLK_1;
+            }
             if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_ESCAPE) {
                 paused = !paused;
                 if (paused) { SDL_SetRelativeMouseMode(SDL_FALSE); SDL_ShowCursor(SDL_ENABLE); }
@@ -489,7 +525,10 @@ int main(void) {
                     dynamic_lighting=!dynamic_lighting;
                     world->dynamic_lighting=dynamic_lighting;
                     for(int ri=0;ri<WORLD_SLOTS;ri++)
-                        if(world->slots[ri].loaded) world->slots[ri].mesh_valid=0;
+                        if(world->slots[ri].loaded) {
+                            world->slots[ri].mesh_dirty=1;
+                            world->slots[ri].lightmap_valid=0;
+                        }
                 }
             } else if (!paused && event.type == SDL_MOUSEBUTTONDOWN) {
                 if (event.button.button == SDL_BUTTON_LEFT)       break_requested=1;
@@ -511,7 +550,7 @@ int main(void) {
             int rebuilt = 0;
             for (int i = 0; i < WORLD_SLOTS && rebuilt < 1; i++) {
                 WorldSlot* s = &world->slots[i];
-                if (s->loaded && !s->mesh_valid) {
+                if (s->loaded && (!s->mesh_valid || s->mesh_dirty)) {
                     world_rebuild_mesh(world, s->chunk.cx, s->chunk.cz);
                     rebuilt++;
                 }
@@ -578,14 +617,17 @@ int main(void) {
                     if(wish_dir[0]==0.0f&&wish_dir[2]==0.0f){vel_x*=friction;vel_z*=friction;}
                     if(vel_y<0.0f) vel_y=0.0f;
                 }
-                if (grounded && keys[SDL_SCANCODE_SPACE] && !crouching) { vel_y=JUMP_IMPULSE; }
-                vel_y -= GRAVITY*dt;
+                if (grounded && keys[SDL_SCANCODE_SPACE] && !crouching && vel_y <= 0.0f) { vel_y=JUMP_IMPULSE; grounded=0; }
+                if (!grounded) vel_y -= GRAVITY*dt;
                 vec3 move_xz = {vel_x*dt, 0.0f, vel_z*dt};
                 move_with_collision_h(&cam, world, move_xz, cur_height, crouching);
                 vec3 next_pos; glm_vec3_copy(cam.position, next_pos);
                 next_pos[1] += vel_y*dt;
-                if (!player_collides_at_h(world, next_pos, cur_height)) cam.position[1]=next_pos[1];
-                else vel_y=0.0f;
+                if (!player_collides_at_h(world, next_pos, cur_height)) {
+                    cam.position[1]=next_pos[1];
+                } else {
+                    vel_y=0.0f;
+                }
                 if (cam.position[1] < FLOOR_Y) { cam.position[1]=FLOOR_Y; vel_y=0.0f; }
             } else {
                 float fly_speed=sprinting?FLY_SPRINT_SPEED:FLY_SPEED;
@@ -610,14 +652,12 @@ int main(void) {
             }
             if (place_requested && sel.hit) {
                 Block* pb = world_get_block(world, sel.place_x, sel.place_y, sel.place_z);
-                if (pb && pb->type == BLOCK_AIR) {
-                    pb->type = BLOCK_COBBLESTONE;
+                if (pb && pb->type == BLOCK_AIR && hotbar_blocks[selected_slot] != BLOCK_AIR) {
+                    pb->type = hotbar_blocks[selected_slot];
                     vec3 foot = {cam.position[0], real_y, cam.position[2]};
                     if (!player_collides_at_h(world, foot, cur_height)) {
-                        int pcx=(int)floorf((float)sel.place_x/CHUNK_SIZE_X);
-                        int pcz=(int)floorf((float)sel.place_z/CHUNK_SIZE_Z);
-                        WorldSlot* ps=world_get_slot(world,pcx,pcz);
-                        if(ps){ps->chunk.dirty=1;world_rebuild_mesh(world,pcx,pcz);}
+                        pb->type = BLOCK_AIR;
+                        world_set_block(world, sel.place_x, sel.place_y, sel.place_z, hotbar_blocks[selected_slot]);
                         sel.hit=0; raycast_block_selection(world,cam.position,cam.orientation,6.0f,&sel);
                     } else { pb->type=BLOCK_AIR; }
                 }
@@ -700,6 +740,65 @@ int main(void) {
                 glUniform4f(u_ui_color,1,1,1,1);
                 glDrawArrays(GL_TRIANGLES,0,ftc/2);
                 glBindBuffer(GL_ARRAY_BUFFER,0); glBindVertexArray(0);
+                glDisable(GL_BLEND); glEnable(GL_CULL_FACE); glEnable(GL_DEPTH_TEST);
+            }
+
+            {
+                glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
+                glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                float slot_size = (float)screen_h * 0.07f;
+                if (slot_size < 20.0f) slot_size = 20.0f;
+                if (slot_size > 64.0f) slot_size = 64.0f;
+                float pad = slot_size * 0.1f;
+                float total_w = 9.0f * slot_size + 8.0f * pad;
+                float hx = ((float)screen_w - total_w) * 0.5f;
+                float hy = (float)screen_h - slot_size - slot_size * 0.15f;
+
+                glUseProgram(uiProgram); glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER, uiVBO);
+                glUniform2f(u_ui_screenSize, (float)screen_w, (float)screen_h);
+                float slot_verts[12]; int svc;
+                for (int si = 0; si < 9; si++) {
+                    float sx2 = hx + si * (slot_size + pad);
+                    svc = 0; append_rect(slot_verts, &svc, sx2, hy, slot_size, slot_size);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*svc, slot_verts);
+                    glUniform4f(u_ui_color, 0.15f, 0.15f, 0.15f, 0.7f);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                    if (si == selected_slot) {
+                        float brd = slot_size * 0.06f;
+                        float bverts[48]; int bvc = 0;
+                        append_rect(bverts, &bvc, sx2-brd, hy-brd, slot_size+2*brd, brd);
+                        append_rect(bverts, &bvc, sx2-brd, hy+slot_size, slot_size+2*brd, brd);
+                        append_rect(bverts, &bvc, sx2-brd, hy, brd, slot_size);
+                        append_rect(bverts, &bvc, sx2+slot_size, hy, brd, slot_size);
+                        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*bvc, bverts);
+                        glUniform4f(u_ui_color, 1.0f, 1.0f, 1.0f, 0.9f);
+                        glDrawArrays(GL_TRIANGLES, 0, bvc/2);
+                    }
+                }
+                glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
+
+                for (int si = 0; si < 9; si++) {
+                    if (!hotbar_textures[si]) continue;
+                    float sx2 = hx + si * (slot_size + pad);
+                    float inner = slot_size * 0.75f;
+                    float ox = sx2 + (slot_size - inner) * 0.5f;
+                    float oy = hy + (slot_size - inner) * 0.5f;
+                    float iv[24] = {
+                        ox,       oy,       0,0,
+                        ox+inner, oy,       1,0,
+                        ox+inner, oy+inner, 1,1,
+                        ox,       oy,       0,0,
+                        ox+inner, oy+inner, 1,1,
+                        ox,       oy+inner, 0,1,
+                    };
+                    glUseProgram(buttonProgram); glBindVertexArray(buttonVAO); glBindBuffer(GL_ARRAY_BUFFER, buttonVBO);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(iv), iv);
+                    glUniform2f(u_btn_screenSize, (float)screen_w, (float)screen_h);
+                    glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, hotbar_textures[si]);
+                    glUniform1i(u_btn_tex, 3);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                    glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
+                }
                 glDisable(GL_BLEND); glEnable(GL_CULL_FACE); glEnable(GL_DEPTH_TEST);
             }
 
@@ -786,6 +885,7 @@ int main(void) {
     world_save_all_dirty(world);
     world_free(world);
     glDeleteTextures(1,&texture); glDeleteTextures(1,&buttonTexture); glDeleteTextures(1,&crosshairTexture);
+    for (int i = 0; i < 9; i++) if (hotbar_textures[i]) glDeleteTextures(1, &hotbar_textures[i]);
     glDeleteProgram(shaderProgram); glDeleteProgram(uiProgram); glDeleteProgram(buttonProgram); glDeleteProgram(selectionProgram);
     glDeleteBuffers(1,&uiVBO); glDeleteVertexArrays(1,&uiVAO);
     glDeleteBuffers(1,&buttonVBO); glDeleteVertexArrays(1,&buttonVAO);
