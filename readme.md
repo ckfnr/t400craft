@@ -53,4 +53,4 @@ Here is a little insight into the development process and how the project evolve
 
 ![First Time Building](screenshots/house.png)
 
-*Here you can see some rudimentary water mechanics, aswell as a automatically generated world and a house I built.*
+*Here you can see some rudimentary water mechanics, aswell as an automatically generated world and a house I built.*
