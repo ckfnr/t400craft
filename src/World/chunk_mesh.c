@@ -16,6 +16,7 @@ static int block_face_texture_layer(BlockType type, int face) {
         case BLOCK_COBBLESTONE: return 3;
         case BLOCK_STONE:       return 3;
         case BLOCK_OAK_PLANKS:  return 4;
+        case BLOCK_WATER:       return 5;
         case BLOCK_AIR:
         default:                return 0;
     }
@@ -40,7 +41,7 @@ void chunk_compute_lightmap(Chunk* chunk,
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
         for (int z = 0; z < CHUNK_SIZE_Z; z++) {
             for (int y = CHUNK_SIZE_Y - 1; y >= 0; y--) {
-                if (chunk->blocks[x][y][z].type != BLOCK_AIR) break;
+                if (block_opaque(chunk->blocks[x][y][z].type)) break;
                 light[x][y][z] = MAX_LIGHT;
                 local_queue[tail++] = (LightNode){(short)x, (short)y, (short)z};
             }
@@ -58,7 +59,7 @@ void chunk_compute_lightmap(Chunk* chunk,
             if (nx < 0 || nx >= CHUNK_SIZE_X) continue;
             if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
             if (nz < 0 || nz >= CHUNK_SIZE_Z) continue;
-            if (chunk->blocks[nx][ny][nz].type != BLOCK_AIR) continue;
+            if (block_opaque(chunk->blocks[nx][ny][nz].type)) continue;
             if (light[nx][ny][nz] >= lv - 1) continue;
             light[nx][ny][nz] = (uint8_t)(lv - 1);
             local_queue[tail++] = (LightNode){(short)nx, (short)ny, (short)nz};
@@ -82,16 +83,16 @@ static void build_lightmap_from_cache(Chunk* chunk, Chunk* neighbors[4],
     for (int x = 0; x < CHUNK_SIZE_X; x++)
         for (int y = 0; y < CHUNK_SIZE_Y; y++)
             for (int z = 0; z < CHUNK_SIZE_Z; z++)
-                ext_solid[x+1][y][z+1] = (chunk->blocks[x][y][z].type != BLOCK_AIR);
+                ext_solid[x+1][y][z+1] = (uint8_t)block_opaque(chunk->blocks[x][y][z].type);
 
     for (int y = 0; y < CHUNK_SIZE_Y; y++) {
         for (int z = 0; z < CHUNK_SIZE_Z; z++) {
-            if (nbc[0]) ext_solid[0][y][z+1]       = (nbc[0]->blocks[CHUNK_SIZE_X-1][y][z].type != BLOCK_AIR);
-            if (nbc[1]) ext_solid[EXT_X-1][y][z+1] = (nbc[1]->blocks[0][y][z].type != BLOCK_AIR);
+            if (nbc[0]) ext_solid[0][y][z+1]       = (uint8_t)block_opaque(nbc[0]->blocks[CHUNK_SIZE_X-1][y][z].type);
+            if (nbc[1]) ext_solid[EXT_X-1][y][z+1] = (uint8_t)block_opaque(nbc[1]->blocks[0][y][z].type);
         }
         for (int x = 0; x < CHUNK_SIZE_X; x++) {
-            if (nbc[2]) ext_solid[x+1][y][0]       = (nbc[2]->blocks[x][y][CHUNK_SIZE_Z-1].type != BLOCK_AIR);
-            if (nbc[3]) ext_solid[x+1][y][EXT_Z-1] = (nbc[3]->blocks[x][y][0].type != BLOCK_AIR);
+            if (nbc[2]) ext_solid[x+1][y][0]       = (uint8_t)block_opaque(nbc[2]->blocks[x][y][CHUNK_SIZE_Z-1].type);
+            if (nbc[3]) ext_solid[x+1][y][EXT_Z-1] = (uint8_t)block_opaque(nbc[3]->blocks[x][y][0].type);
         }
     }
 
@@ -100,7 +101,7 @@ static void build_lightmap_from_cache(Chunk* chunk, Chunk* neighbors[4],
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
         for (int z = 0; z < CHUNK_SIZE_Z; z++) {
             for (int y = CHUNK_SIZE_Y - 1; y >= 0; y--) {
-                if (chunk->blocks[x][y][z].type != BLOCK_AIR) break;
+                if (block_opaque(chunk->blocks[x][y][z].type)) break;
                 ext_light[x+1][y][z+1] = MAX_LIGHT;
                 ext_queue[tail] = (LightNode){(short)(x+1), (short)y, (short)(z+1)};
                 tail = (tail + 1) % EXT_QCAP;
@@ -174,7 +175,7 @@ static void build_lightmap_from_cache(Chunk* chunk, Chunk* neighbors[4],
 }
 
 static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
-                     float x, float y, float z, int face, BlockType type, float light) {
+                     float x, float y, float z, int face, BlockType type, float light, const float* ch) {
     static const float face_dim[] = {1.0f, 0.6f, 0.8f, 0.8f, 0.7f, 0.7f};
     float b = light * face_dim[face];
     float layer = (float)block_face_texture_layer(type, face);
@@ -217,6 +218,15 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
             positions[3][0]=x+1; positions[3][1]=y+1; positions[3][2]=z+1;
             break;
     }
+    if (ch) {
+        for (int i = 0; i < 4; i++) {
+            if (positions[i][1] > y + 0.5f) {
+                int xi = positions[i][0] > x + 0.5f;
+                int zi = positions[i][2] > z + 0.5f;
+                positions[i][1] = y + ch[xi * 2 + zi];
+            }
+        }
+    }
     float uvs[4][2] = {{0,0},{1,0},{1,1},{0,1}};
     if (face >= 2) {
         float flipped[4][2] = {{0,1},{1,1},{1,0},{0,0}};
@@ -237,9 +247,49 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
     inds[(*ic)++] = base+0; inds[(*ic)++] = base+2; inds[(*ic)++] = base+3;
 }
 
-static Mesh build_mesh(Chunk* chunk, Chunk* neighbors[4],
+static Block* mesh_cell(Chunk* chunk, Chunk* neighbors[4], int nx, int ny, int nz) {
+    if (ny < 0 || ny >= CHUNK_SIZE_Y) return NULL;
+    int xin = (nx >= 0 && nx < CHUNK_SIZE_X);
+    int zin = (nz >= 0 && nz < CHUNK_SIZE_Z);
+    if (xin && zin) return &chunk->blocks[nx][ny][nz];
+    if (!neighbors || (!xin && !zin)) return NULL;
+    if (nx < 0)             return neighbors[0] ? &neighbors[0]->blocks[CHUNK_SIZE_X-1][ny][nz] : NULL;
+    if (nx >= CHUNK_SIZE_X) return neighbors[1] ? &neighbors[1]->blocks[0][ny][nz] : NULL;
+    if (nz < 0)             return neighbors[2] ? &neighbors[2]->blocks[nx][ny][CHUNK_SIZE_Z-1] : NULL;
+    return                         neighbors[3] ? &neighbors[3]->blocks[nx][ny][0] : NULL;
+}
+
+static float water_surface_h(uint8_t lvl) {
+    if (lvl >= WATER_LEVEL_FALLING) return 1.0f;
+    if (lvl == WATER_LEVEL_SOURCE)  return 0.875f;
+    return 0.875f * (float)lvl / 8.0f;
+}
+
+static float water_corner_h(Chunk* chunk, Chunk* neighbors[4], int x, int y, int z, int xi, int zi) {
+    float total = 0.0f, weight = 0.0f;
+    for (int ox = -1; ox <= 0; ox++) {
+        for (int oz = -1; oz <= 0; oz++) {
+            int sx = x + xi + ox, sz = z + zi + oz;
+            Block* b = mesh_cell(chunk, neighbors, sx, y, sz);
+            if (!b) continue;
+            if (b->type == BLOCK_WATER) {
+                Block* up = mesh_cell(chunk, neighbors, sx, y + 1, sz);
+                if (up && up->type == BLOCK_WATER) return 1.0f;
+                float h = water_surface_h(b->level);
+                float w = h >= 0.8f ? 10.0f : 1.0f;
+                total += h * w;
+                weight += w;
+            } else if (!block_opaque(b->type)) {
+                weight += 1.0f;
+            }
+        }
+    }
+    return weight > 0.0f ? total / weight : 1.0f;
+}
+
+static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
                         uint8_t light[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z],
-                        int dynamic) {
+                        int dynamic, Mesh* out_solid, Mesh* out_water) {
     static const int dx[] = {0, 0, 0, 0, -1, 1};
     static const int dy[] = {1,-1, 0, 0,  0, 0};
     static const int dz[] = {0, 0, 1,-1,  0, 0};
@@ -250,13 +300,21 @@ static Mesh build_mesh(Chunk* chunk, Chunk* neighbors[4],
 
     static GLfloat verts[MAX_VERTICES * 9];
     static GLuint  inds[MAX_INDICES];
-    int vc = 0, ic = 0;
+    static GLfloat wverts[MAX_VERTICES * 9];
+    static GLuint  winds[MAX_INDICES];
+    int vc = 0, ic = 0, wvc = 0, wic = 0;
 
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
         for (int y = 0; y < CHUNK_SIZE_Y; y++) {
             for (int z = 0; z < CHUNK_SIZE_Z; z++) {
-                if (chunk->blocks[x][y][z].type == BLOCK_AIR) continue;
                 BlockType type = chunk->blocks[x][y][z].type;
+                if (type == BLOCK_AIR) continue;
+                int is_water = (type == BLOCK_WATER);
+                float wch[4];
+                if (is_water)
+                    for (int xi = 0; xi < 2; xi++)
+                        for (int zi = 0; zi < 2; zi++)
+                            wch[xi * 2 + zi] = water_corner_h(chunk, neighbors, x, y, z, xi, zi);
                 for (int face = 0; face < 6; face++) {
                     int nx = x + dx[face];
                     int ny = y + dy[face];
@@ -264,8 +322,11 @@ static Mesh build_mesh(Chunk* chunk, Chunk* neighbors[4],
                     int out_of_bounds = (nx < 0 || nx >= CHUNK_SIZE_X ||
                                         ny < 0 || ny >= CHUNK_SIZE_Y ||
                                         nz < 0 || nz >= CHUNK_SIZE_Z);
+                    BlockType ntype = BLOCK_AIR;
+                    int have_n = 0;
                     if (!out_of_bounds) {
-                        if (chunk->blocks[nx][ny][nz].type != BLOCK_AIR) continue;
+                        ntype = chunk->blocks[nx][ny][nz].type;
+                        have_n = 1;
                     } else if (!(ny < 0 || ny >= CHUNK_SIZE_Y)) {
                         Chunk* nbr = NULL;
                         int lx = nx, lnz = nz;
@@ -273,8 +334,15 @@ static Mesh build_mesh(Chunk* chunk, Chunk* neighbors[4],
                         else if (nx >= CHUNK_SIZE_X) { nbr = neighbors ? neighbors[1] : NULL; lx  = 0; }
                         else if (nz < 0)             { nbr = neighbors ? neighbors[2] : NULL; lnz = CHUNK_SIZE_Z-1; }
                         else                         { nbr = neighbors ? neighbors[3] : NULL; lnz = 0; }
-                        if (nbr && chunk_get_block(nbr, lx, ny, lnz) &&
-                            chunk_get_block(nbr, lx, ny, lnz)->type != BLOCK_AIR) continue;
+                        if (nbr) {
+                            Block* nbb = chunk_get_block(nbr, lx, ny, lnz);
+                            if (nbb) { ntype = nbb->type; have_n = 1; }
+                        }
+                    }
+                    if (is_water) {
+                        if (have_n && ntype != BLOCK_AIR) continue;
+                    } else {
+                        if (have_n && block_opaque(ntype)) continue;
                     }
                     float lv;
                     if (!dynamic) {
@@ -292,19 +360,25 @@ static Mesh build_mesh(Chunk* chunk, Chunk* neighbors[4],
                     } else {
                         lv = light_table[ext_light[nx+1][ny][EXT_Z-1]];
                     }
-                    add_face(verts, inds, &vc, &ic,
-                             (float)x, (float)y, (float)z,
-                             face, type, lv);
+                    if (is_water)
+                        add_face(wverts, winds, &wvc, &wic,
+                                 (float)x, (float)y, (float)z,
+                                 face, type, lv, wch);
+                    else
+                        add_face(verts, inds, &vc, &ic,
+                                 (float)x, (float)y, (float)z,
+                                 face, type, lv, NULL);
                 }
             }
         }
     }
 
-    Mesh m = mesh_create(verts, vc * 9 * sizeof(GLfloat), inds, ic * sizeof(GLuint));
-    return m;
+    *out_solid = mesh_create(verts, vc * 9 * sizeof(GLfloat), inds, ic * sizeof(GLuint));
+    *out_water = mesh_create(wverts, wvc * 9 * sizeof(GLfloat), winds, wic * sizeof(GLuint));
 }
 
-Mesh chunk_build_mesh_with_neighbors(Chunk* chunk, Chunk* neighbors[4], int dynamic) {
+void chunk_build_mesh_with_neighbors(Chunk* chunk, Chunk* neighbors[4], int dynamic,
+    Mesh* out_solid, Mesh* out_water) {
     static uint8_t light[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
     static uint8_t tmp[4][CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
     if (dynamic) {
@@ -318,21 +392,14 @@ Mesh chunk_build_mesh_with_neighbors(Chunk* chunk, Chunk* neighbors[4], int dyna
             nb[0] ? (uint8_t*)tmp[0] : NULL, nb[1] ? (uint8_t*)tmp[1] : NULL,
             nb[2] ? (uint8_t*)tmp[2] : NULL, nb[3] ? (uint8_t*)tmp[3] : NULL, light);
     }
-    return build_mesh(chunk, neighbors, light, dynamic);
+    build_mesh(chunk, neighbors, light, dynamic, out_solid, out_water);
 }
 
-Mesh chunk_build_mesh_with_cached_neighbors(Chunk* chunk, Chunk* neighbors[4],
-    uint8_t* nb0, uint8_t* nb1, uint8_t* nb2, uint8_t* nb3, int dynamic) {
+void chunk_build_mesh_with_cached_neighbors(Chunk* chunk, Chunk* neighbors[4],
+    uint8_t* nb0, uint8_t* nb1, uint8_t* nb2, uint8_t* nb3, int dynamic,
+    Mesh* out_solid, Mesh* out_water) {
     static uint8_t light[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
     if (dynamic)
         build_lightmap_from_cache(chunk, neighbors, nb0, nb1, nb2, nb3, light);
-    return build_mesh(chunk, neighbors, light, dynamic);
-}
-
-Mesh chunk_build_mesh_dynamic(Chunk* chunk, int dynamic) {
-    return chunk_build_mesh_with_neighbors(chunk, NULL, dynamic);
-}
-
-Mesh chunk_build_mesh(Chunk* chunk) {
-    return chunk_build_mesh_dynamic(chunk, 1);
+    build_mesh(chunk, neighbors, light, dynamic, out_solid, out_water);
 }

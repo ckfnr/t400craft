@@ -12,6 +12,7 @@
 typedef struct {
     Chunk  chunk;
     Mesh   mesh;
+    Mesh   water_mesh;
     int    loaded;
     int    mesh_valid;
     int    mesh_dirty;
@@ -19,12 +20,18 @@ typedef struct {
     int    lightmap_valid;
 } WorldSlot;
 
+typedef struct { int x, y, z; } WaterPos;
+
 typedef struct {
     WorldSlot slots[WORLD_SLOTS];
     int center_cx;
     int center_cz;
     char save_dir[256];
     int dynamic_lighting;
+    WaterPos* water_queue;
+    int water_count;
+    int water_cap;
+    float water_timer;
 } World;
 
 void world_init(World* world, int center_cx, int center_cz, const char* save_dir);
@@ -36,6 +43,10 @@ WorldSlot* world_get_slot(World* world, int cx, int cz);
 Chunk*     world_get_chunk(World* world, int cx, int cz);
 Block*     world_get_block(World* world, int wx, int wy, int wz);
 int        world_set_block(World* world, int wx, int wy, int wz, BlockType type);
+
+int  world_place_water(World* world, int wx, int wy, int wz);
+void world_schedule_water(World* world, int wx, int wy, int wz);
+void world_update_water(World* world, float dt);
 
 void world_rebuild_mesh(World* world, int cx, int cz);
 void world_save_chunk(World* world, int cx, int cz);

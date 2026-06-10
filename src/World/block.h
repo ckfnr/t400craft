@@ -1,6 +1,8 @@
 #ifndef BLOCK_H
 #define BLOCK_H
 
+#include <stdint.h>
+
 typedef enum {
     BLOCK_AIR = 0,
     BLOCK_DIRT,
@@ -8,10 +10,19 @@ typedef enum {
     BLOCK_COBBLESTONE,
     BLOCK_STONE,
     BLOCK_OAK_PLANKS,
+    BLOCK_WATER,
 } BlockType;
+
+#define WATER_LEVEL_SOURCE  8
+#define WATER_LEVEL_FALLING 9
 
 typedef struct {
     BlockType type;
+    uint8_t level;
 } Block;
+
+static inline int block_opaque(BlockType type) {
+    return type != BLOCK_AIR && type != BLOCK_WATER;
+}
 
 #endif

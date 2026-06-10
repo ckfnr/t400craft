@@ -143,7 +143,7 @@ static int point_in_rect(int px, int py, float x, float y, float rw, float rh) {
     return px >= (int)x && px <= (int)(x + rw) && py >= (int)y && py <= (int)(y + rh);
 }
 
-static int block_is_solid(BlockType type) { return type != BLOCK_AIR; }
+static int block_is_solid(BlockType type) { return block_opaque(type); }
 
 typedef struct {
     int hit;
@@ -212,7 +212,7 @@ static void move_with_collision_h(Camera* cam, World* world, vec3 movement, floa
             cam->position[2] = next[2];
 }
 
-static int raycast_block_selection(World* world, vec3 origin, vec3 direction, float max_dist, BlockSelection* sel) {
+static int raycast_block_selection(World* world, vec3 origin, vec3 direction, float max_dist, BlockSelection* sel, int include_water) {
     vec3 rd; glm_vec3_copy(direction, rd);
     if (glm_vec3_norm(rd) < 0.0001f) return 0;
     glm_vec3_normalize(rd);
@@ -228,7 +228,7 @@ static int raycast_block_selection(World* world, vec3 origin, vec3 direction, fl
     float travelled = 0.0f;
     while (travelled <= max_dist) {
         Block* b = world_get_block(world, mx, my, mz);
-        if (b && block_is_solid(b->type)) {
+        if (b && (block_is_solid(b->type) || (include_water && b->type == BLOCK_WATER))) {
             sel->hit=1; sel->block_x=mx; sel->block_y=my; sel->block_z=mz; return 1;
         }
         if (tmx < tmy) {
@@ -386,8 +386,9 @@ int main(void) {
         "src/textures/grass_top.png",
         "src/textures/cobblestone.png",
         "src/textures/oak_planks.png",
+        "src/textures/water.png",
     };
-    GLuint texture = load_texture_array(world_textures, 5);
+    GLuint texture = load_texture_array(world_textures, 6);
 
     int buttonW, buttonH, buttonCh;
     unsigned char* buttonBytes = stbi_load("src/UI/button.png", &buttonW, &buttonH, &buttonCh, 4);
@@ -418,13 +419,15 @@ int main(void) {
         "src/textures/oak_planks.png",
         "src/textures/grass_side.png",
         "src/textures/dirtblock.png",
-        NULL, NULL, NULL, NULL, NULL,
+        "src/textures/water_bucket.png",
+        NULL, NULL, NULL, NULL,
     };
     const BlockType hotbar_blocks[9] = {
         BLOCK_COBBLESTONE, BLOCK_OAK_PLANKS,
         BLOCK_GRASS, BLOCK_DIRT,
         BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR,
     };
+    const int hotbar_is_bucket[9] = {0, 0, 0, 0, 1, 0, 0, 0, 0};
     GLuint hotbar_textures[9] = {0};
     for (int i = 0; i < 9; i++) {
         if (!hotbar_tex_paths[i]) continue;
@@ -565,6 +568,8 @@ int main(void) {
         if (dt > 0.1f) dt = 0.1f;
         last_time = now;
 
+        if (!paused) world_update_water(world, dt);
+
         fps_count++;
         fps_timer += dt;
         if (fps_timer >= 0.5f) {
@@ -596,6 +601,12 @@ int main(void) {
             float cur_height = crouching ? CROUCH_HEIGHT : STAND_HEIGHT;
             if (jump_buffer > 0) jump_buffer -= (int)(dt * 1000.0f);
 
+            Block* body_block = world_get_block(world,
+                (int)floorf(cam.position[0]),
+                (int)floorf(cam.position[1] + 0.4f),
+                (int)floorf(cam.position[2]));
+            int in_water = body_block && body_block->type == BLOCK_WATER;
+
             if (gravity_enabled) {
                 int grounded = player_grounded_at_h(world, cam.position, cur_height);
                 if (crouching && !grounded) { crouching=0; cur_height=STAND_HEIGHT; }
@@ -612,7 +623,9 @@ int main(void) {
                     if(vel_y<0.0f) vel_y=0.0f;
                 }
                 if (grounded && keys[SDL_SCANCODE_SPACE] && !crouching && vel_y <= 0.0f) { vel_y=JUMP_IMPULSE; grounded=0; }
-                if (!grounded) vel_y -= GRAVITY*dt;
+                if (in_water && keys[SDL_SCANCODE_SPACE]) vel_y = 4.0f;
+                if (!grounded) vel_y -= (in_water ? GRAVITY*0.3f : GRAVITY)*dt;
+                if (in_water && vel_y < -3.0f) vel_y = -3.0f;
                 vec3 move_xz = {vel_x*dt, 0.0f, vel_z*dt};
                 move_with_collision_h(&cam, world, move_xz, cur_height, crouching);
                 vec3 next_pos; glm_vec3_copy(cam.position, next_pos);
@@ -637,23 +650,39 @@ int main(void) {
             cam.position[1] = eye_y;
 
             BlockSelection sel = {0};
-            raycast_block_selection(world, cam.position, cam.orientation, 6.0f, &sel);
+            raycast_block_selection(world, cam.position, cam.orientation, 6.0f, &sel, 0);
 
             if (break_requested && sel.hit) {
                 if (world_set_block(world, sel.block_x, sel.block_y, sel.block_z, BLOCK_AIR)) {
-                    sel.hit=0; raycast_block_selection(world, cam.position, cam.orientation, 6.0f, &sel);
+                    sel.hit=0; raycast_block_selection(world, cam.position, cam.orientation, 6.0f, &sel, 0);
                 }
             }
-            if (place_requested && sel.hit) {
+            if (place_requested && hotbar_is_bucket[selected_slot]) {
+                BlockSelection wsel = {0};
+                raycast_block_selection(world, cam.position, cam.orientation, 6.0f, &wsel, 1);
+                if (wsel.hit) {
+                    Block* tb = world_get_block(world, wsel.block_x, wsel.block_y, wsel.block_z);
+                    if (tb && tb->type == BLOCK_WATER) {
+                        if (tb->level == WATER_LEVEL_SOURCE)
+                            world_set_block(world, wsel.block_x, wsel.block_y, wsel.block_z, BLOCK_AIR);
+                    } else {
+                        Block* pb = world_get_block(world, wsel.place_x, wsel.place_y, wsel.place_z);
+                        if (pb && !block_is_solid(pb->type))
+                            world_place_water(world, wsel.place_x, wsel.place_y, wsel.place_z);
+                    }
+                }
+            } else if (place_requested && sel.hit) {
                 Block* pb = world_get_block(world, sel.place_x, sel.place_y, sel.place_z);
-                if (pb && pb->type == BLOCK_AIR && hotbar_blocks[selected_slot] != BLOCK_AIR) {
+                if (pb && !block_is_solid(pb->type) && hotbar_blocks[selected_slot] != BLOCK_AIR) {
+                    BlockType old_type = pb->type;
+                    uint8_t old_level = pb->level;
                     pb->type = hotbar_blocks[selected_slot];
                     vec3 foot = {cam.position[0], real_y, cam.position[2]};
                     if (!player_collides_at_h(world, foot, cur_height)) {
-                        pb->type = BLOCK_AIR;
+                        pb->type = old_type; pb->level = old_level;
                         world_set_block(world, sel.place_x, sel.place_y, sel.place_z, hotbar_blocks[selected_slot]);
-                        sel.hit=0; raycast_block_selection(world,cam.position,cam.orientation,6.0f,&sel);
-                    } else { pb->type=BLOCK_AIR; }
+                        sel.hit=0; raycast_block_selection(world,cam.position,cam.orientation,6.0f,&sel,0);
+                    } else { pb->type = old_type; pb->level = old_level; }
                 }
             }
 
@@ -685,6 +714,24 @@ int main(void) {
                 glUniformMatrix4fv(u_model, 1, GL_FALSE, (float*)chunk_model);
                 mesh_draw(&s->mesh);
             }
+
+            glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glDisable(GL_CULL_FACE);
+            for (int i = 0; i < WORLD_SLOTS; i++) {
+                WorldSlot* s = &world->slots[i];
+                if (!s->loaded || !s->mesh_valid) continue;
+                if (s->water_mesh.index_count == 0) continue;
+                float wx = (float)(s->chunk.cx * CHUNK_SIZE_X);
+                float wz = (float)(s->chunk.cz * CHUNK_SIZE_Z);
+                if (!chunk_in_frustum(frustum, wx, wz)) continue;
+                mat4 chunk_model; glm_mat4_identity(chunk_model);
+                vec3 chunk_offset = {wx, 0.0f, wz};
+                glm_translate(chunk_model, chunk_offset);
+                glUniformMatrix4fv(u_model, 1, GL_FALSE, (float*)chunk_model);
+                mesh_draw(&s->water_mesh);
+            }
+            glEnable(GL_CULL_FACE);
+            glDisable(GL_BLEND);
 
             if (sel.hit) {
                 glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

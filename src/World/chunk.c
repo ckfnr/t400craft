@@ -69,6 +69,7 @@ void chunk_generate(Chunk* chunk, int cx, int cz) {
                     t = BLOCK_STONE;
                 }
                 chunk->blocks[x][y][z].type = t;
+                chunk->blocks[x][y][z].level = 0;
             }
         }
     }
