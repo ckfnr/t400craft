@@ -23,8 +23,14 @@ static int block_face_texture_layer(BlockType type, int face) {
 
 typedef struct { short x, y, z; } LightNode;
 
-static LightNode bfs_queue[CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z * 6];
-static uint8_t neighbor_lightmap[4][CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
+#define EXT_X (CHUNK_SIZE_X + 2)
+#define EXT_Z (CHUNK_SIZE_Z + 2)
+#define EXT_QCAP (EXT_X * CHUNK_SIZE_Y * EXT_Z + 1)
+
+static uint8_t ext_light[EXT_X][CHUNK_SIZE_Y][EXT_Z];
+static uint8_t ext_solid[EXT_X][CHUNK_SIZE_Y][EXT_Z];
+static uint8_t ext_in_queue[EXT_X][CHUNK_SIZE_Y][EXT_Z];
+static LightNode ext_queue[EXT_QCAP];
 
 void chunk_compute_lightmap(Chunk* chunk,
                              uint8_t light[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z]) {
@@ -60,54 +66,78 @@ void chunk_compute_lightmap(Chunk* chunk,
     }
 }
 
-static void build_lightmap_from_cache(Chunk* chunk,
+static void build_lightmap_from_cache(Chunk* chunk, Chunk* neighbors[4],
     uint8_t* nb0, uint8_t* nb1, uint8_t* nb2, uint8_t* nb3,
     uint8_t light[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z]) {
 
-    memset(light, 0, CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z);
-    int head = 0, tail = 0;
+    typedef uint8_t NbMap[CHUNK_SIZE_Y][CHUNK_SIZE_Z];
+    NbMap* nbm[4] = {(NbMap*)nb0, (NbMap*)nb1, (NbMap*)nb2, (NbMap*)nb3};
+    Chunk* null_nb[4] = {NULL, NULL, NULL, NULL};
+    Chunk** nbc = neighbors ? neighbors : null_nb;
 
-    uint8_t* nbs[4] = {nb0, nb1, nb2, nb3};
-    for (int i = 0; i < 4; i++) {
-        if (nbs[i])
-            memcpy(neighbor_lightmap[i], nbs[i], CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z);
-        else
-            memset(neighbor_lightmap[i], 0, sizeof(neighbor_lightmap[i]));
+    memset(ext_light, 0, sizeof(ext_light));
+    memset(ext_solid, 1, sizeof(ext_solid));
+    memset(ext_in_queue, 0, sizeof(ext_in_queue));
+
+    for (int x = 0; x < CHUNK_SIZE_X; x++)
+        for (int y = 0; y < CHUNK_SIZE_Y; y++)
+            for (int z = 0; z < CHUNK_SIZE_Z; z++)
+                ext_solid[x+1][y][z+1] = (chunk->blocks[x][y][z].type != BLOCK_AIR);
+
+    for (int y = 0; y < CHUNK_SIZE_Y; y++) {
+        for (int z = 0; z < CHUNK_SIZE_Z; z++) {
+            if (nbc[0]) ext_solid[0][y][z+1]       = (nbc[0]->blocks[CHUNK_SIZE_X-1][y][z].type != BLOCK_AIR);
+            if (nbc[1]) ext_solid[EXT_X-1][y][z+1] = (nbc[1]->blocks[0][y][z].type != BLOCK_AIR);
+        }
+        for (int x = 0; x < CHUNK_SIZE_X; x++) {
+            if (nbc[2]) ext_solid[x+1][y][0]       = (nbc[2]->blocks[x][y][CHUNK_SIZE_Z-1].type != BLOCK_AIR);
+            if (nbc[3]) ext_solid[x+1][y][EXT_Z-1] = (nbc[3]->blocks[x][y][0].type != BLOCK_AIR);
+        }
     }
+
+    int head = 0, tail = 0;
 
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
         for (int z = 0; z < CHUNK_SIZE_Z; z++) {
             for (int y = CHUNK_SIZE_Y - 1; y >= 0; y--) {
                 if (chunk->blocks[x][y][z].type != BLOCK_AIR) break;
-                light[x][y][z] = MAX_LIGHT;
-                bfs_queue[tail++] = (LightNode){(short)x, (short)y, (short)z};
+                ext_light[x+1][y][z+1] = MAX_LIGHT;
+                ext_queue[tail] = (LightNode){(short)(x+1), (short)y, (short)(z+1)};
+                tail = (tail + 1) % EXT_QCAP;
+                ext_in_queue[x+1][y][z+1] = 1;
             }
         }
     }
 
     for (int y = 0; y < CHUNK_SIZE_Y; y++) {
         for (int z = 0; z < CHUNK_SIZE_Z; z++) {
-            uint8_t nlv = neighbor_lightmap[0][CHUNK_SIZE_X-1][y][z];
-            if (nlv > 1 && chunk->blocks[0][y][z].type == BLOCK_AIR) {
-                uint8_t inc = (uint8_t)(nlv - 1);
-                if (light[0][y][z] < inc) { light[0][y][z] = inc; bfs_queue[tail++] = (LightNode){0,(short)y,(short)z}; }
+            uint8_t v;
+            if (nbm[0] && !ext_solid[0][y][z+1] && (v = nbm[0][CHUNK_SIZE_X-1][y][z]) > 0) {
+                ext_light[0][y][z+1] = v;
+                ext_queue[tail] = (LightNode){0, (short)y, (short)(z+1)};
+                tail = (tail + 1) % EXT_QCAP;
+                ext_in_queue[0][y][z+1] = 1;
             }
-            nlv = neighbor_lightmap[1][0][y][z];
-            if (nlv > 1 && chunk->blocks[CHUNK_SIZE_X-1][y][z].type == BLOCK_AIR) {
-                uint8_t inc = (uint8_t)(nlv - 1);
-                if (light[CHUNK_SIZE_X-1][y][z] < inc) { light[CHUNK_SIZE_X-1][y][z] = inc; bfs_queue[tail++] = (LightNode){(short)(CHUNK_SIZE_X-1),(short)y,(short)z}; }
+            if (nbm[1] && !ext_solid[EXT_X-1][y][z+1] && (v = nbm[1][0][y][z]) > 0) {
+                ext_light[EXT_X-1][y][z+1] = v;
+                ext_queue[tail] = (LightNode){EXT_X-1, (short)y, (short)(z+1)};
+                tail = (tail + 1) % EXT_QCAP;
+                ext_in_queue[EXT_X-1][y][z+1] = 1;
             }
         }
         for (int x = 0; x < CHUNK_SIZE_X; x++) {
-            uint8_t nlv = neighbor_lightmap[2][x][y][CHUNK_SIZE_Z-1];
-            if (nlv > 1 && chunk->blocks[x][y][0].type == BLOCK_AIR) {
-                uint8_t inc = (uint8_t)(nlv - 1);
-                if (light[x][y][0] < inc) { light[x][y][0] = inc; bfs_queue[tail++] = (LightNode){(short)x,(short)y,0}; }
+            uint8_t v;
+            if (nbm[2] && !ext_solid[x+1][y][0] && (v = nbm[2][x][y][CHUNK_SIZE_Z-1]) > 0) {
+                ext_light[x+1][y][0] = v;
+                ext_queue[tail] = (LightNode){(short)(x+1), (short)y, 0};
+                tail = (tail + 1) % EXT_QCAP;
+                ext_in_queue[x+1][y][0] = 1;
             }
-            nlv = neighbor_lightmap[3][x][y][0];
-            if (nlv > 1 && chunk->blocks[x][y][CHUNK_SIZE_Z-1].type == BLOCK_AIR) {
-                uint8_t inc = (uint8_t)(nlv - 1);
-                if (light[x][y][CHUNK_SIZE_Z-1] < inc) { light[x][y][CHUNK_SIZE_Z-1] = inc; bfs_queue[tail++] = (LightNode){(short)x,(short)y,(short)(CHUNK_SIZE_Z-1)}; }
+            if (nbm[3] && !ext_solid[x+1][y][EXT_Z-1] && (v = nbm[3][x][y][0]) > 0) {
+                ext_light[x+1][y][EXT_Z-1] = v;
+                ext_queue[tail] = (LightNode){(short)(x+1), (short)y, EXT_Z-1};
+                tail = (tail + 1) % EXT_QCAP;
+                ext_in_queue[x+1][y][EXT_Z-1] = 1;
             }
         }
     }
@@ -115,20 +145,32 @@ static void build_lightmap_from_cache(Chunk* chunk,
     static const int dx[] = {1,-1, 0, 0, 0, 0};
     static const int dy[] = {0, 0, 1,-1, 0, 0};
     static const int dz[] = {0, 0, 0, 0, 1,-1};
-    while (head < tail) {
-        LightNode n = bfs_queue[head++];
-        int lv = light[n.x][n.y][n.z];
+    while (head != tail) {
+        LightNode n = ext_queue[head];
+        head = (head + 1) % EXT_QCAP;
+        ext_in_queue[n.x][n.y][n.z] = 0;
+        int lv = ext_light[n.x][n.y][n.z];
         if (lv <= 1) continue;
         for (int d = 0; d < 6; d++) {
             int nx = n.x + dx[d], ny = n.y + dy[d], nz = n.z + dz[d];
+            if (nx < 0 || nx >= EXT_X) continue;
             if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
-            if (nx < 0 || nx >= CHUNK_SIZE_X || nz < 0 || nz >= CHUNK_SIZE_Z) continue;
-            if (chunk->blocks[nx][ny][nz].type != BLOCK_AIR) continue;
-            if (light[nx][ny][nz] >= lv - 1) continue;
-            light[nx][ny][nz] = (uint8_t)(lv - 1);
-            bfs_queue[tail++] = (LightNode){(short)nx, (short)ny, (short)nz};
+            if (nz < 0 || nz >= EXT_Z) continue;
+            if (ext_solid[nx][ny][nz]) continue;
+            if (ext_light[nx][ny][nz] >= lv - 1) continue;
+            ext_light[nx][ny][nz] = (uint8_t)(lv - 1);
+            if (!ext_in_queue[nx][ny][nz]) {
+                ext_queue[tail] = (LightNode){(short)nx, (short)ny, (short)nz};
+                tail = (tail + 1) % EXT_QCAP;
+                ext_in_queue[nx][ny][nz] = 1;
+            }
         }
     }
+
+    for (int x = 0; x < CHUNK_SIZE_X; x++)
+        for (int y = 0; y < CHUNK_SIZE_Y; y++)
+            for (int z = 0; z < CHUNK_SIZE_Z; z++)
+                light[x][y][z] = ext_light[x+1][y][z+1];
 }
 
 static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
@@ -206,8 +248,8 @@ static Mesh build_mesh(Chunk* chunk, Chunk* neighbors[4],
         0.70f, 0.75f, 0.80f, 0.85f, 0.90f, 0.94f, 0.97f, 1.00f
     };
 
-    GLfloat* verts = malloc(MAX_VERTICES * 9 * sizeof(GLfloat));
-    GLuint*  inds  = malloc(MAX_INDICES  * sizeof(GLuint));
+    static GLfloat verts[MAX_VERTICES * 9];
+    static GLuint  inds[MAX_INDICES];
     int vc = 0, ic = 0;
 
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
@@ -242,13 +284,13 @@ static Mesh build_mesh(Chunk* chunk, Chunk* neighbors[4],
                     } else if (ny < 0 || ny >= CHUNK_SIZE_Y) {
                         lv = 1.0f;
                     } else if (nx < 0) {
-                        lv = light_table[neighbor_lightmap[0][CHUNK_SIZE_X-1][ny][nz]];
+                        lv = light_table[ext_light[0][ny][nz+1]];
                     } else if (nx >= CHUNK_SIZE_X) {
-                        lv = light_table[neighbor_lightmap[1][0][ny][nz]];
+                        lv = light_table[ext_light[EXT_X-1][ny][nz+1]];
                     } else if (nz < 0) {
-                        lv = light_table[neighbor_lightmap[2][nx][ny][CHUNK_SIZE_Z-1]];
+                        lv = light_table[ext_light[nx+1][ny][0]];
                     } else {
-                        lv = light_table[neighbor_lightmap[3][nx][ny][0]];
+                        lv = light_table[ext_light[nx+1][ny][EXT_Z-1]];
                     }
                     add_face(verts, inds, &vc, &ic,
                              (float)x, (float)y, (float)z,
@@ -259,7 +301,6 @@ static Mesh build_mesh(Chunk* chunk, Chunk* neighbors[4],
     }
 
     Mesh m = mesh_create(verts, vc * 9 * sizeof(GLfloat), inds, ic * sizeof(GLuint));
-    free(verts); free(inds);
     return m;
 }
 
@@ -273,9 +314,9 @@ Mesh chunk_build_mesh_with_neighbors(Chunk* chunk, Chunk* neighbors[4], int dyna
             if (nb[i]) chunk_compute_lightmap(nb[i], tmp[i]);
             else memset(tmp[i], 0, sizeof(tmp[i]));
         }
-        build_lightmap_from_cache(chunk,
-            (uint8_t*)tmp[0], (uint8_t*)tmp[1],
-            (uint8_t*)tmp[2], (uint8_t*)tmp[3], light);
+        build_lightmap_from_cache(chunk, neighbors,
+            nb[0] ? (uint8_t*)tmp[0] : NULL, nb[1] ? (uint8_t*)tmp[1] : NULL,
+            nb[2] ? (uint8_t*)tmp[2] : NULL, nb[3] ? (uint8_t*)tmp[3] : NULL, light);
     }
     return build_mesh(chunk, neighbors, light, dynamic);
 }
@@ -284,7 +325,7 @@ Mesh chunk_build_mesh_with_cached_neighbors(Chunk* chunk, Chunk* neighbors[4],
     uint8_t* nb0, uint8_t* nb1, uint8_t* nb2, uint8_t* nb3, int dynamic) {
     static uint8_t light[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
     if (dynamic)
-        build_lightmap_from_cache(chunk, nb0, nb1, nb2, nb3, light);
+        build_lightmap_from_cache(chunk, neighbors, nb0, nb1, nb2, nb3, light);
     return build_mesh(chunk, neighbors, light, dynamic);
 }
 

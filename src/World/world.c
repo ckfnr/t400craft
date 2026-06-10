@@ -173,6 +173,8 @@ void world_update_center(World* world, int new_cx, int new_cz) {
         }
     }
 
+    uint8_t newly[WORLD_SLOTS];
+    memset(newly, 0, sizeof(newly));
     for (int lz = 0; lz < WORLD_DIAMETER; lz++) {
         for (int lx = 0; lx < WORLD_DIAMETER; lx++) {
             int idx = lz * WORLD_DIAMETER + lx;
@@ -180,6 +182,22 @@ void world_update_center(World* world, int new_cx, int new_cz) {
                 int cx = (new_cx - WORLD_RADIUS) + lx;
                 int cz = (new_cz - WORLD_RADIUS) + lz;
                 load_or_generate(world, idx, cx, cz);
+                newly[idx] = 1;
+            }
+        }
+    }
+    for (int lz = 0; lz < WORLD_DIAMETER; lz++) {
+        for (int lx = 0; lx < WORLD_DIAMETER; lx++) {
+            int idx = lz * WORLD_DIAMETER + lx;
+            if (!newly[idx]) continue;
+            static const int ndx[4] = {-1, 1, 0, 0};
+            static const int ndz[4] = {0, 0, -1, 1};
+            for (int d = 0; d < 4; d++) {
+                int nlx = lx + ndx[d], nlz = lz + ndz[d];
+                if (nlx < 0 || nlx >= WORLD_DIAMETER || nlz < 0 || nlz >= WORLD_DIAMETER) continue;
+                int nidx = nlz * WORLD_DIAMETER + nlx;
+                if (world->slots[nidx].loaded && !newly[nidx] && world->slots[nidx].mesh_valid)
+                    world->slots[nidx].mesh_dirty = 1;
             }
         }
     }
@@ -220,13 +238,13 @@ int world_set_block(World* world, int wx, int wy, int wz, BlockType type) {
     if (!b) return 0;
     b->type = type;
     c->dirty = 1;
-    for (int dz2 = -1; dz2 <= 1; dz2++) {
-        for (int dx2 = -1; dx2 <= 1; dx2++) {
-            WorldSlot* s = world_get_slot(world, cx + dx2, cz + dz2);
-            if (s) {
-                s->lightmap_valid = 0;
-                s->mesh_dirty = 1;
-            }
+    static const int idx2[5] = {0, -1, 1, 0, 0};
+    static const int idz2[5] = {0, 0, 0, -1, 1};
+    for (int i = 0; i < 5; i++) {
+        WorldSlot* s = world_get_slot(world, cx + idx2[i], cz + idz2[i]);
+        if (s) {
+            s->lightmap_valid = 0;
+            s->mesh_dirty = 1;
         }
     }
     world_rebuild_mesh(world, cx, cz);
@@ -249,10 +267,12 @@ void world_rebuild_mesh(World* world, int cx, int cz) {
         nb[3] ? &nb[3]->chunk : NULL,
     };
     if (world->dynamic_lighting) {
-        chunk_compute_lightmap(&s->chunk, s->lightmap);
-        s->lightmap_valid = 1;
+        if (!s->lightmap_valid) {
+            chunk_compute_lightmap(&s->chunk, s->lightmap);
+            s->lightmap_valid = 1;
+        }
         for (int i = 0; i < 4; i++) {
-            if (nb[i] && (!nb[i]->lightmap_valid || nb[i]->mesh_dirty)) {
+            if (nb[i] && !nb[i]->lightmap_valid) {
                 chunk_compute_lightmap(&nb[i]->chunk, nb[i]->lightmap);
                 nb[i]->lightmap_valid = 1;
             }
