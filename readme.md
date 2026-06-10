@@ -48,3 +48,9 @@ Here is a little insight into the development process and how the project evolve
 ![First Time Building](screenshots/first%20time%20building.png)
 
 *The first time I implemented a building mechanic.*
+
+### a little House with some water
+
+![First Time Building](screenshots/house.png)
+
+*Here you can see some rudimentary water mechanics, aswell as a automatically generated world and a house I built.*
