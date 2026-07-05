@@ -379,7 +379,15 @@ static void water_set(World* world, int wx, int wy, int wz, BlockType type, uint
 
 int world_place_water(World* world, int wx, int wy, int wz) {
     Block* b = world_get_block(world, wx, wy, wz);
-    if (!b || block_opaque(b->type)) return 0;
+    if (!b) return 0;
+    if (b->type == BLOCK_WATER) {
+        water_set(world, wx, wy, wz, BLOCK_WATER, WATER_LEVEL_SOURCE);
+        int cx = (int)floorf((float)wx / CHUNK_SIZE_X);
+        int cz = (int)floorf((float)wz / CHUNK_SIZE_Z);
+        world_rebuild_mesh(world, cx, cz);
+        return 1;
+    }
+    if (block_opaque(b->type)) return 0;
     water_set(world, wx, wy, wz, BLOCK_WATER, WATER_LEVEL_SOURCE);
     int cx = (int)floorf((float)wx / CHUNK_SIZE_X);
     int cz = (int)floorf((float)wz / CHUNK_SIZE_Z);

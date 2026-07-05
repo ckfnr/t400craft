@@ -606,6 +606,12 @@ int main(void) {
                 (int)floorf(cam.position[1] + 0.4f),
                 (int)floorf(cam.position[2]));
             int in_water = body_block && body_block->type == BLOCK_WATER;
+            float eye_y_preview = cam.position[1] + (crouching ? CROUCH_EYE : STAND_EYE);
+            Block* head_block = world_get_block(world,
+                (int)floorf(cam.position[0]),
+                (int)floorf(eye_y_preview),
+                (int)floorf(cam.position[2]));
+            int head_in_water = head_block && head_block->type == BLOCK_WATER;
 
             if (gravity_enabled) {
                 int grounded = player_grounded_at_h(world, cam.position, cur_height);
@@ -626,14 +632,61 @@ int main(void) {
                 if (in_water && keys[SDL_SCANCODE_SPACE]) vel_y = 4.0f;
                 if (!grounded) vel_y -= (in_water ? GRAVITY*0.3f : GRAVITY)*dt;
                 if (in_water && vel_y < -3.0f) vel_y = -3.0f;
-                vec3 move_xz = {vel_x*dt, 0.0f, vel_z*dt};
-                move_with_collision_h(&cam, world, move_xz, cur_height, crouching);
                 vec3 next_pos; glm_vec3_copy(cam.position, next_pos);
                 next_pos[1] += vel_y*dt;
                 if (!player_collides_at_h(world, next_pos, cur_height)) {
                     cam.position[1]=next_pos[1];
                 } else {
-                    vel_y=0.0f;
+                    int escaped = 0;
+                    if (in_water && keys[SDL_SCANCODE_SPACE]) {
+                        for (float lift = 0.05f; lift <= 1.2f; lift += 0.05f) {
+                            next_pos[1] = cam.position[1] + lift;
+                            if (!player_collides_at_h(world, next_pos, cur_height)) {
+                                cam.position[1] = next_pos[1];
+                                vel_y = 0.0f;
+                                escaped = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if (!escaped) vel_y=0.0f;
+                }
+                vec3 move_xz = {vel_x*dt, 0.0f, vel_z*dt};
+                if (in_water && !head_in_water && keys[SDL_SCANCODE_SPACE]) {
+                    vec3 xz_try; glm_vec3_copy(cam.position, xz_try);
+                    xz_try[0] += move_xz[0];
+                    xz_try[2] += move_xz[2];
+                    if (player_collides_at_h(world, xz_try, cur_height)) {
+                        int climbed = 0;
+                        for (float lift = 0.25f; lift <= 0.70f; lift += 0.05f) {
+                            vec3 climb_try; glm_vec3_copy(xz_try, climb_try);
+                            climb_try[1] += lift;
+                            Block* climb_body = world_get_block(world,
+                                (int)floorf(climb_try[0]),
+                                (int)floorf(climb_try[1] + 0.4f),
+                                (int)floorf(climb_try[2]));
+                            float climb_eye_y = climb_try[1] + (crouching ? CROUCH_EYE : STAND_EYE);
+                            Block* climb_head = world_get_block(world,
+                                (int)floorf(climb_try[0]),
+                                (int)floorf(climb_eye_y),
+                                (int)floorf(climb_try[2]));
+                            if ((climb_body && climb_body->type == BLOCK_WATER) ||
+                                (climb_head && climb_head->type == BLOCK_WATER)) continue;
+                            if (!player_collides_at_h(world, climb_try, cur_height)) {
+                                glm_vec3_copy(climb_try, cam.position);
+                                climbed = 1;
+                                break;
+                            }
+                        }
+                        if (!climbed)
+                            move_with_collision_h(&cam, world, move_xz, cur_height, 0);
+                    } else {
+                        move_with_collision_h(&cam, world, move_xz, cur_height, 0);
+                    }
+                } else if (in_water) {
+                    move_with_collision_h(&cam, world, move_xz, cur_height, 0);
+                } else {
+                    move_with_collision_h(&cam, world, move_xz, cur_height, crouching);
                 }
                 if (cam.position[1] < FLOOR_Y) { cam.position[1]=FLOOR_Y; vel_y=0.0f; }
             } else {
@@ -665,6 +718,8 @@ int main(void) {
                     if (tb && tb->type == BLOCK_WATER) {
                         if (tb->level == WATER_LEVEL_SOURCE)
                             world_set_block(world, wsel.block_x, wsel.block_y, wsel.block_z, BLOCK_AIR);
+                        else
+                            world_place_water(world, wsel.block_x, wsel.block_y, wsel.block_z);
                     } else {
                         Block* pb = world_get_block(world, wsel.place_x, wsel.place_y, wsel.place_z);
                         if (pb && !block_is_solid(pb->type))
@@ -692,7 +747,10 @@ int main(void) {
             glUniformMatrix4fv(u_camMatrix, 1, GL_FALSE, (float*)cam.camera_matrix);
             glUniformMatrix4fv(u_view,      1, GL_FALSE, (float*)cam.view);
             glUniformMatrix4fv(u_proj,      1, GL_FALSE, (float*)cam.proj);
-            glUniform3f(u_fog_color, FOG_R, FOG_G, FOG_B);
+            if (head_in_water)
+                glUniform3f(u_fog_color, FOG_R * 0.78f, FOG_G * 0.86f, fminf(FOG_B * 1.12f, 1.0f));
+            else
+                glUniform3f(u_fog_color, FOG_R, FOG_G, FOG_B);
             glUniform1f(u_fog_start, FOG_START);
             glUniform1f(u_fog_end,   FOG_END);
             glActiveTexture(GL_TEXTURE0);
@@ -747,6 +805,24 @@ int main(void) {
                 glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
                 glBindVertexArray(0); glEnable(GL_CULL_FACE); glDisable(GL_BLEND);
                 glUseProgram(shaderProgram);
+            }
+
+            if (head_in_water) {
+                glDisable(GL_DEPTH_TEST);
+                glDisable(GL_CULL_FACE);
+                glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glUseProgram(uiProgram); glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER, uiVBO);
+                float tint[12]; int tintc = 0;
+                append_rect(tint, &tintc, 0.0f, 0.0f, (float)screen_w, (float)screen_h);
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * tintc, tint);
+                glUniform2f(u_ui_screenSize, (float)screen_w, (float)screen_h);
+                glUniform4f(u_ui_color, 0.08f, 0.24f, 0.42f, 0.24f);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+                glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
+                glUseProgram(shaderProgram);
+                glDisable(GL_BLEND);
+                glEnable(GL_DEPTH_TEST);
+                glEnable(GL_CULL_FACE);
             }
 
             glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
@@ -867,6 +943,22 @@ int main(void) {
                 glUniformMatrix4fv(u_model,1,GL_FALSE,(float*)cm);
                 mesh_draw(&s->mesh);
             }
+
+            glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glDisable(GL_CULL_FACE);
+            for (int i=0;i<WORLD_SLOTS;i++) {
+                WorldSlot* s=&world->slots[i];
+                if(!s->loaded||!s->mesh_valid) continue;
+                if (s->water_mesh.index_count == 0) continue;
+                float wx=(float)(s->chunk.cx*CHUNK_SIZE_X), wz=(float)(s->chunk.cz*CHUNK_SIZE_Z);
+                if(!chunk_in_frustum(frustum,wx,wz)) continue;
+                mat4 cm; glm_mat4_identity(cm);
+                vec3 co={wx,0.0f,wz}; glm_translate(cm,co);
+                glUniformMatrix4fv(u_model,1,GL_FALSE,(float*)cm);
+                mesh_draw(&s->water_mesh);
+            }
+            glEnable(GL_CULL_FACE);
+            glDisable(GL_BLEND);
 
             glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
             glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
