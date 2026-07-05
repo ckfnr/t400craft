@@ -5,7 +5,7 @@
 #include "../Mesh/mesh.h"
 #include <stdint.h>
 
-#define WORLD_RADIUS 4
+#define WORLD_RADIUS 16
 #define WORLD_DIAMETER (WORLD_RADIUS * 2 + 1)
 #define WORLD_SLOTS (WORLD_DIAMETER * WORLD_DIAMETER)
 
@@ -38,6 +38,7 @@ void world_init(World* world, int center_cx, int center_cz, const char* save_dir
 void world_free(World* world);
 
 void world_update_center(World* world, int new_cx, int new_cz);
+void world_stream_missing(World* world, int budget);
 
 WorldSlot* world_get_slot(World* world, int cx, int cz);
 Chunk*     world_get_chunk(World* world, int cx, int cz);

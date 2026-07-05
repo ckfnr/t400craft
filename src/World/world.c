@@ -72,6 +72,24 @@ static void unload_slot(World* world, int slot_idx) {
     s->loaded = 0;
 }
 
+static void mark_neighbor_meshes_dirty(World* world, int cx, int cz) {
+    static const int ndx[5] = {0, -1, 1, 0, 0};
+    static const int ndz[5] = {0, 0, 0, -1, 1};
+    for (int i = 0; i < 5; i++) {
+        WorldSlot* s = world_get_slot(world, cx + ndx[i], cz + ndz[i]);
+        if (s) {
+            s->lightmap_valid = 0;
+            s->mesh_dirty = 1;
+        }
+    }
+}
+
+static void load_missing_slot(World* world, int idx, int cx, int cz) {
+    if (world->slots[idx].loaded) return;
+    load_or_generate(world, idx, cx, cz);
+    mark_neighbor_meshes_dirty(world, cx, cz);
+}
+
 void world_init(World* world, int center_cx, int center_cz, const char* save_dir) {
     memset(world, 0, sizeof(World));
     strncpy(world->save_dir, save_dir, sizeof(world->save_dir) - 1);
@@ -195,36 +213,28 @@ void world_update_center(World* world, int new_cx, int new_cz) {
             }
         }
     }
-
-    uint8_t newly[WORLD_SLOTS];
-    memset(newly, 0, sizeof(newly));
-    for (int lz = 0; lz < WORLD_DIAMETER; lz++) {
-        for (int lx = 0; lx < WORLD_DIAMETER; lx++) {
-            int idx = lz * WORLD_DIAMETER + lx;
-            if (!world->slots[idx].loaded) {
-                int cx = (new_cx - WORLD_RADIUS) + lx;
-                int cz = (new_cz - WORLD_RADIUS) + lz;
-                load_or_generate(world, idx, cx, cz);
-                newly[idx] = 1;
-            }
-        }
-    }
-    for (int lz = 0; lz < WORLD_DIAMETER; lz++) {
-        for (int lx = 0; lx < WORLD_DIAMETER; lx++) {
-            int idx = lz * WORLD_DIAMETER + lx;
-            if (!newly[idx]) continue;
-            static const int ndx[4] = {-1, 1, 0, 0};
-            static const int ndz[4] = {0, 0, -1, 1};
-            for (int d = 0; d < 4; d++) {
-                int nlx = lx + ndx[d], nlz = lz + ndz[d];
-                if (nlx < 0 || nlx >= WORLD_DIAMETER || nlz < 0 || nlz >= WORLD_DIAMETER) continue;
-                int nidx = nlz * WORLD_DIAMETER + nlx;
-                if (world->slots[nidx].loaded && !newly[nidx] && world->slots[nidx].mesh_valid)
-                    world->slots[nidx].mesh_dirty = 1;
-            }
-        }
-    }
     free(old_slots);
+}
+
+void world_stream_missing(World* world, int budget) {
+    if (budget <= 0) return;
+    for (int ring = 0; ring <= WORLD_RADIUS && budget > 0; ring++) {
+        int min_cx = world->center_cx - ring;
+        int max_cx = world->center_cx + ring;
+        int min_cz = world->center_cz - ring;
+        int max_cz = world->center_cz + ring;
+
+        for (int cx = min_cx; cx <= max_cx && budget > 0; cx++) {
+            for (int cz = min_cz; cz <= max_cz && budget > 0; cz++) {
+                if (abs(cx - world->center_cx) != ring && abs(cz - world->center_cz) != ring) continue;
+                int idx;
+                slot_index(cx, cz, world->center_cx, world->center_cz, &idx);
+                if (idx < 0 || world->slots[idx].loaded) continue;
+                load_missing_slot(world, idx, cx, cz);
+                budget--;
+            }
+        }
+    }
 }
 WorldSlot* world_get_slot(World* world, int cx, int cz) {
     int idx;

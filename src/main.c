@@ -171,6 +171,57 @@ static int chunk_in_frustum(FPlane p[6], float x0, float z0) {
     return 1;
 }
 
+static float clampf_local(float value, float min_value, float max_value) {
+    if (value < min_value) return min_value;
+    if (value > max_value) return max_value;
+    return value;
+}
+
+static void ui_window_to_drawable(SDL_Window* window, int window_x, int window_y, float* drawable_x, float* drawable_y) {
+    int ww = 1, wh = 1, dw = 1, dh = 1;
+    SDL_GetWindowSize(window, &ww, &wh);
+    SDL_GL_GetDrawableSize(window, &dw, &dh);
+    float scale_x = ww > 0 ? (float)dw / (float)ww : 1.0f;
+    float scale_y = wh > 0 ? (float)dh / (float)wh : 1.0f;
+    *drawable_x = (float)window_x * scale_x;
+    *drawable_y = (float)window_y * scale_y;
+}
+
+static int chunk_within_render_distance(float cam_x, float cam_z, float chunk_x, float chunk_z, float render_distance_chunks) {
+    float center_x = chunk_x + CHUNK_SIZE_X * 0.5f;
+    float center_z = chunk_z + CHUNK_SIZE_Z * 0.5f;
+    float max_dist = render_distance_chunks * (float)CHUNK_SIZE_X;
+    float dx = center_x - cam_x;
+    float dz = center_z - cam_z;
+    return dx * dx + dz * dz <= max_dist * max_dist;
+}
+typedef struct {
+    int fps_cap;
+    float render_distance_chunks;
+    int gravity_enabled;
+} Settings;
+
+static void load_settings(const char* path, Settings* settings) {
+    FILE* f = fopen(path, "r");
+    if (!f) return;
+    int fps_cap = settings->fps_cap;
+    float render_distance_chunks = settings->render_distance_chunks;
+    int gravity_enabled = settings->gravity_enabled;
+    if (fscanf(f, "%d %f %d", &fps_cap, &render_distance_chunks, &gravity_enabled) == 3) {
+        settings->fps_cap = fps_cap;
+        settings->render_distance_chunks = render_distance_chunks;
+        settings->gravity_enabled = gravity_enabled ? 1 : 0;
+    }
+    fclose(f);
+}
+
+static void save_settings(const char* path, const Settings* settings) {
+    FILE* f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "%d %.3f %d\n", settings->fps_cap, settings->render_distance_chunks, settings->gravity_enabled ? 1 : 0);
+    fclose(f);
+}
+
 static int player_collides_at_h(World* world, vec3 position, float ph) {
     const float hw = 0.3f;
     float min_x = position[0] - hw + 0.001f, max_x = position[0] + hw - 0.001f;
@@ -485,7 +536,6 @@ int main(void) {
     const float HFRICTION_PS=0.03f, AIR_ACCEL_FRAC=0.2f;
     const float STAND_HEIGHT=1.8f, CROUCH_HEIGHT=1.35f;
     const float STAND_EYE=1.62f, CROUCH_EYE=1.27f;
-    const float FOG_START=3.0f*16.0f, FOG_END=4.5f*16.0f;
     const float FOG_R=0.4f, FOG_G=0.7f, FOG_B=1.0f;
 
     float vel_x=0, vel_y=0, vel_z=0;
@@ -494,7 +544,19 @@ int main(void) {
     float place_timer=0.0f;
     int show_fps=0, fps_count=0, fps_display=0;
     float fps_timer=0.0f;
+    int fps_cap = 120;
+    float render_distance_chunks = 6.0f;
+    float reach_distance = 7.5f;
+    int paused_drag_slider = 0;
     Uint32 last_time = SDL_GetTicks();
+    Uint64 fps_perf_freq = SDL_GetPerformanceFrequency();
+    Uint64 fps_frame_start_counter = SDL_GetPerformanceCounter();
+    double fps_next_deadline_seconds = (double)fps_frame_start_counter / (double)fps_perf_freq;
+    Settings settings = { fps_cap, render_distance_chunks, gravity_enabled };
+    load_settings("Savefiles/settings.cfg", &settings);
+    fps_cap = settings.fps_cap;
+    render_distance_chunks = settings.render_distance_chunks;
+    gravity_enabled = settings.gravity_enabled;
 
     while (running) {
         int break_requested=0, place_requested=0;
@@ -512,6 +574,7 @@ int main(void) {
             }
             if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_ESCAPE) {
                 paused = !paused;
+                paused_drag_slider = 0;
                 if (paused) { SDL_SetRelativeMouseMode(SDL_FALSE); SDL_ShowCursor(SDL_ENABLE); }
                 else { SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click = 1; }
             } else if (!paused && event.type == SDL_KEYDOWN && event.key.repeat == 0
@@ -519,14 +582,34 @@ int main(void) {
                 (void)0;
             } else if (paused && event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
                 int sw=0, sh=0; SDL_GL_GetDrawableSize(window, &sw, &sh);
-                float bw=280.0f, bh=64.0f;
-                float bx=((float)sw-bw)*0.5f, by=((float)sh-bh)*0.5f;
-                float gby=by+84.0f;
-                if (point_in_rect(event.button.x, event.button.y, bx, by, bw, bh)) {
+                float menu_w=360.0f, row_h=64.0f, row_gap=84.0f;
+                float menu_x=((float)sw-menu_w)*0.5f;
+                float slider_y1=(float)sh*0.23f;
+                float slider_y2=slider_y1+row_gap;
+                float button_y1=slider_y2+row_gap;
+                float button_y2=button_y1+row_gap;
+                float mouse_x=0.0f, mouse_y=0.0f;
+                ui_window_to_drawable(window, event.button.x, event.button.y, &mouse_x, &mouse_y);
+                if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, slider_y1, menu_w, row_h)) {
+                    paused_drag_slider = 1;
+                } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, slider_y2, menu_w, row_h)) {
+                    paused_drag_slider = 2;
+                } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, button_y1, menu_w, row_h)) {
                     paused=0; SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click=1;
-                } else if (point_in_rect(event.button.x, event.button.y, bx, gby, bw, bh)) {
+                } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, button_y2, menu_w, row_h)) {
                     gravity_enabled=!gravity_enabled; if(!gravity_enabled) vel_y=0.0f;
                 }
+                if (paused_drag_slider == 1 || paused_drag_slider == 2) {
+                    float t = clampf_local((mouse_x - menu_x) / menu_w, 0.0f, 1.0f);
+                    if (paused_drag_slider == 1) {
+                        fps_cap = 30 + (int)(t * 1970.0f + 0.5f);
+                        fps_next_deadline_seconds = (double)SDL_GetPerformanceCounter() / (double)fps_perf_freq;
+                    } else {
+                        render_distance_chunks = 4.0f + t * 28.0f;
+                    }
+                }
+            } else if (paused && event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
+                paused_drag_slider = 0;
             } else if (!paused && event.type == SDL_MOUSEBUTTONDOWN) {
                 if (event.button.button == SDL_BUTTON_LEFT)       break_requested=1;
                 if (event.button.button == SDL_BUTTON_RIGHT)      mouse_right_held=1;
@@ -542,6 +625,7 @@ int main(void) {
         int cx_player = (int)floorf(cam.position[0] / CHUNK_SIZE_X);
         int cz_player = (int)floorf(cam.position[2] / CHUNK_SIZE_Z);
         world_update_center(world, cx_player, cz_player);
+        world_stream_missing(world, 4);
 
         {
             int rebuilt = 0;
@@ -560,6 +644,11 @@ int main(void) {
         glClearColor(FOG_R, FOG_G, FOG_B, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glUseProgram(shaderProgram);
+
+        float render_distance_effective_chunks = render_distance_chunks;
+        float fog_end = fmaxf(render_distance_effective_chunks * (float)CHUNK_SIZE_X * 0.55f, 24.0f);
+        float fog_start = fmaxf(fog_end * 0.30f, 8.0f);
+        if (fog_start > fog_end - 6.0f) fog_start = fmaxf(fog_end - 6.0f, 0.0f);
 
         mat4 model; glm_mat4_identity(model);
 
@@ -703,16 +792,16 @@ int main(void) {
             cam.position[1] = eye_y;
 
             BlockSelection sel = {0};
-            raycast_block_selection(world, cam.position, cam.orientation, 6.0f, &sel, 0);
+            raycast_block_selection(world, cam.position, cam.orientation, reach_distance, &sel, 0);
 
             if (break_requested && sel.hit) {
                 if (world_set_block(world, sel.block_x, sel.block_y, sel.block_z, BLOCK_AIR)) {
-                    sel.hit=0; raycast_block_selection(world, cam.position, cam.orientation, 6.0f, &sel, 0);
+                    sel.hit=0; raycast_block_selection(world, cam.position, cam.orientation, reach_distance, &sel, 0);
                 }
             }
             if (place_requested && hotbar_is_bucket[selected_slot]) {
                 BlockSelection wsel = {0};
-                raycast_block_selection(world, cam.position, cam.orientation, 6.0f, &wsel, 1);
+                raycast_block_selection(world, cam.position, cam.orientation, reach_distance, &wsel, 1);
                 if (wsel.hit) {
                     Block* tb = world_get_block(world, wsel.block_x, wsel.block_y, wsel.block_z);
                     if (tb && tb->type == BLOCK_WATER) {
@@ -736,7 +825,7 @@ int main(void) {
                     if (!player_collides_at_h(world, foot, cur_height)) {
                         pb->type = old_type; pb->level = old_level;
                         world_set_block(world, sel.place_x, sel.place_y, sel.place_z, hotbar_blocks[selected_slot]);
-                        sel.hit=0; raycast_block_selection(world,cam.position,cam.orientation,6.0f,&sel,0);
+                        sel.hit=0; raycast_block_selection(world,cam.position,cam.orientation,reach_distance,&sel,0);
                     } else { pb->type = old_type; pb->level = old_level; }
                 }
             }
@@ -751,8 +840,8 @@ int main(void) {
                 glUniform3f(u_fog_color, FOG_R * 0.78f, FOG_G * 0.86f, fminf(FOG_B * 1.12f, 1.0f));
             else
                 glUniform3f(u_fog_color, FOG_R, FOG_G, FOG_B);
-            glUniform1f(u_fog_start, FOG_START);
-            glUniform1f(u_fog_end,   FOG_END);
+            glUniform1f(u_fog_start, fog_start);
+            glUniform1f(u_fog_end,   fog_end);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
             glUniform1i(u_tex0, 0);
@@ -765,6 +854,7 @@ int main(void) {
                 if (!s->loaded || !s->mesh_valid) continue;
                 float wx = (float)(s->chunk.cx * CHUNK_SIZE_X);
                 float wz = (float)(s->chunk.cz * CHUNK_SIZE_Z);
+                if (!chunk_within_render_distance(cam.position[0], cam.position[2], wx, wz, render_distance_effective_chunks)) continue;
                 if (!chunk_in_frustum(frustum, wx, wz)) continue;
                 mat4 chunk_model; glm_mat4_identity(chunk_model);
                 vec3 chunk_offset = {wx, 0.0f, wz};
@@ -781,6 +871,7 @@ int main(void) {
                 if (s->water_mesh.index_count == 0) continue;
                 float wx = (float)(s->chunk.cx * CHUNK_SIZE_X);
                 float wz = (float)(s->chunk.cz * CHUNK_SIZE_Z);
+                if (!chunk_within_render_distance(cam.position[0], cam.position[2], wx, wz, render_distance_effective_chunks)) continue;
                 if (!chunk_in_frustum(frustum, wx, wz)) continue;
                 mat4 chunk_model; glm_mat4_identity(chunk_model);
                 vec3 chunk_offset = {wx, 0.0f, wz};
@@ -928,7 +1019,7 @@ int main(void) {
             glUniformMatrix4fv(u_view,1,GL_FALSE,(float*)cam.view);
             glUniformMatrix4fv(u_proj,1,GL_FALSE,(float*)cam.proj);
             glUniform3f(u_fog_color,FOG_R,FOG_G,FOG_B);
-            glUniform1f(u_fog_start,FOG_START); glUniform1f(u_fog_end,FOG_END);
+            glUniform1f(u_fog_start,fog_start); glUniform1f(u_fog_end,fog_end);
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D_ARRAY,texture);
             glUniform1i(u_tex0,0);
 
@@ -937,6 +1028,7 @@ int main(void) {
                 WorldSlot* s=&world->slots[i];
                 if(!s->loaded||!s->mesh_valid) continue;
                 float wx=(float)(s->chunk.cx*CHUNK_SIZE_X), wz=(float)(s->chunk.cz*CHUNK_SIZE_Z);
+                if (!chunk_within_render_distance(cam.position[0], cam.position[2], wx, wz, render_distance_effective_chunks)) continue;
                 if(!chunk_in_frustum(frustum,wx,wz)) continue;
                 mat4 cm; glm_mat4_identity(cm);
                 vec3 co={wx,0.0f,wz}; glm_translate(cm,co);
@@ -951,6 +1043,7 @@ int main(void) {
                 if(!s->loaded||!s->mesh_valid) continue;
                 if (s->water_mesh.index_count == 0) continue;
                 float wx=(float)(s->chunk.cx*CHUNK_SIZE_X), wz=(float)(s->chunk.cz*CHUNK_SIZE_Z);
+                if (!chunk_within_render_distance(cam.position[0], cam.position[2], wx, wz, render_distance_effective_chunks)) continue;
                 if(!chunk_in_frustum(frustum,wx,wz)) continue;
                 mat4 cm; glm_mat4_identity(cm);
                 vec3 co={wx,0.0f,wz}; glm_translate(cm,co);
@@ -970,28 +1063,100 @@ int main(void) {
             glUniform4f(u_ui_color,0.35f,0.35f,0.35f,0.65f);
             glDrawArrays(GL_TRIANGLES,0,6);
 
-            float bw=280,bh=64,bx=((float)screen_w-bw)*0.5f,by=((float)screen_h-bh)*0.5f,gby=by+84;
+            float panel_w=360.0f, row_h=64.0f, row_gap=84.0f, slider_h=12.0f, knob_w=14.0f;
+            float panel_x=((float)screen_w-panel_w)*0.5f;
+            float slider_y1=(float)screen_h*0.23f;
+            float slider_y2=slider_y1+row_gap;
+            float button_y1=slider_y2+row_gap;
+            float button_y2=button_y1+row_gap;
+
+            int mouse_x=0, mouse_y=0;
+            Uint32 mouse_mask = SDL_GetMouseState(&mouse_x, &mouse_y);
+            if (paused && paused_drag_slider != 0 && (mouse_mask & SDL_BUTTON(SDL_BUTTON_LEFT))) {
+                float mx=0.0f, my=0.0f;
+                ui_window_to_drawable(window, mouse_x, mouse_y, &mx, &my);
+                float t = clampf_local((mx - panel_x) / panel_w, 0.0f, 1.0f);
+                    if (paused_drag_slider == 1) {
+                        fps_cap = 30 + (int)(t * 1970.0f + 0.5f);
+                        fps_next_deadline_seconds = (double)SDL_GetPerformanceCounter() / (double)fps_perf_freq;
+                    }
+                if (paused_drag_slider == 2) render_distance_chunks = 4.0f + t * 28.0f;
+            }
+    float fog_end = fminf(24.0f + render_distance_effective_chunks * 2.5f, 144.0f);
+    float fog_start = fmaxf(fog_end * 0.40f, 12.0f);
+    if (fog_start > fog_end - 6.0f) fog_start = fmaxf(fog_end - 6.0f, 0.0f);
+
             glUseProgram(buttonProgram); glBindVertexArray(buttonVAO); glBindBuffer(GL_ARRAY_BUFFER,buttonVBO);
             glUniform2f(u_btn_screenSize,(float)screen_w,(float)screen_h);
             glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D,buttonTexture);
             glUniform1i(u_btn_tex,1);
             float boffsets[]={0,84};
             for(int b=0;b<2;b++){
-                float by2=by+boffsets[b];
-                float bv[24]={bx,by2,0,0, bx+bw,by2,1,0, bx+bw,by2+bh,1,1, bx,by2,0,0, bx+bw,by2+bh,1,1, bx,by2+bh,0,1};
+                float by2=button_y1+boffsets[b];
+                float bv[24]={panel_x,by2,0,0, panel_x+panel_w,by2,1,0, panel_x+panel_w,by2+row_h,1,1, panel_x,by2,0,0, panel_x+panel_w,by2+row_h,1,1, panel_x,by2+row_h,0,1};
                 glBufferSubData(GL_ARRAY_BUFFER,0,sizeof(bv),bv);
                 glDrawArrays(GL_TRIANGLES,0,6);
             }
 
             glUseProgram(uiProgram); glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER,uiVBO);
+            float fps_track = clampf_local((float)(fps_cap - 30) / 1970.0f, 0.0f, 1.0f);
+            float rd_track = clampf_local((render_distance_chunks - 4.0f) / 28.0f, 0.0f, 1.0f);
+
+            float track_w = panel_w;
+            float track_h = slider_h;
+            float knob_h = 28.0f;
+            float fps_knob_x = panel_x + fps_track * track_w - knob_w * 0.5f;
+            float rd_knob_x  = panel_x + rd_track * track_w - knob_w * 0.5f;
+
+            float fps_track_rect[12] = {panel_x, slider_y1, panel_x + track_w, slider_y1, panel_x + track_w, slider_y1 + track_h, panel_x, slider_y1, panel_x + track_w, slider_y1 + track_h, panel_x, slider_y1 + track_h};
+            float rd_track_rect[12]  = {panel_x, slider_y2, panel_x + track_w, slider_y2, panel_x + track_w, slider_y2 + track_h, panel_x, slider_y2, panel_x + track_w, slider_y2 + track_h, panel_x, slider_y2 + track_h};
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(fps_track_rect), fps_track_rect);
+            glUniform2f(u_ui_screenSize,(float)screen_w,(float)screen_h);
+            glUniform4f(u_ui_color,0.18f,0.18f,0.18f,0.85f);
+            glDrawArrays(GL_TRIANGLES,0,6);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(rd_track_rect), rd_track_rect);
+            glDrawArrays(GL_TRIANGLES,0,6);
+
+            float fps_knob[12] = {fps_knob_x, slider_y1 - 8.0f, fps_knob_x + knob_w, slider_y1 - 8.0f, fps_knob_x + knob_w, slider_y1 + knob_h, fps_knob_x, slider_y1 - 8.0f, fps_knob_x + knob_w, slider_y1 + knob_h, fps_knob_x, slider_y1 + knob_h};
+            float rd_knob[12]  = {rd_knob_x,  slider_y2 - 8.0f, rd_knob_x + knob_w,  slider_y2 - 8.0f, rd_knob_x + knob_w,  slider_y2 + knob_h, rd_knob_x,  slider_y2 - 8.0f, rd_knob_x + knob_w,  slider_y2 + knob_h, rd_knob_x,  slider_y2 + knob_h};
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(fps_knob), fps_knob);
+            glUniform4f(u_ui_color,0.90f,0.90f,0.90f,1.0f);
+            glDrawArrays(GL_TRIANGLES,0,6);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(rd_knob), rd_knob);
+            glDrawArrays(GL_TRIANGLES,0,6);
+
+            char fps_label[32];
+            char rd_label[32];
+            snprintf(fps_label, sizeof(fps_label), "fps cap: %d", fps_cap);
+            snprintf(rd_label, sizeof(rd_label), "render distance: %.0f chunks", render_distance_effective_chunks);
+            float label_verts[8192]; int label_count=0;
+            const char* pause_title = "pause menu";
+            float title_w = 0.0f;
+            for (const char* ch = pause_title; *ch; ++ch) title_w += (*ch == ' ') ? 4.0f * 2.6f : 6.0f * 2.6f;
+            build_text_vertices(pause_title, panel_x + (panel_w - title_w) * 0.5f, (float)screen_h*0.10f, 2.6f, label_verts, &label_count);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*label_count, label_verts);
+            glUniform4f(u_ui_color,1.0f,1.0f,1.0f,1.0f);
+            glDrawArrays(GL_TRIANGLES,0,label_count/2);
+
+            label_count = 0;
+            build_text_vertices(fps_label, panel_x, slider_y1 - 28.0f, 2.0f, label_verts, &label_count);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*label_count, label_verts);
+            glDrawArrays(GL_TRIANGLES,0,label_count/2);
+
+            label_count = 0;
+            build_text_vertices(rd_label, panel_x, slider_y2 - 28.0f, 2.0f, label_verts, &label_count);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*label_count, label_verts);
+            glDrawArrays(GL_TRIANGLES,0,label_count/2);
+
+            glUseProgram(uiProgram); glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER,uiVBO);
             float tverts[32768]; int tc=0; float ts=2.2f;
             const char* lbls[]={ "continue playing",
                                   gravity_enabled?"gravity on":"gravity off" };
-            float ypos[]={by,gby};
+            float ypos[]={button_y1,button_y2};
             for(int b=0;b<2;b++){
                 tc=0; float tw=0;
                 for(const char* ch=lbls[b];*ch;++ch) tw+=(*ch==' ')?4.0f*ts:6.0f*ts;
-                build_text_vertices(lbls[b],bx+(bw-tw)*0.5f,ypos[b]+(bh-7*ts)*0.5f,ts,tverts,&tc);
+                build_text_vertices(lbls[b],panel_x+(panel_w-tw)*0.5f,ypos[b]+(row_h-7*ts)*0.5f,ts,tverts,&tc);
                 glBufferSubData(GL_ARRAY_BUFFER,0,sizeof(float)*tc,tverts);
                 glUniform2f(u_ui_screenSize,(float)screen_w,(float)screen_h);
                 glUniform4f(u_ui_color,0.15f,0.15f,0.15f,1);
@@ -1001,7 +1166,22 @@ int main(void) {
             glDisable(GL_BLEND); glEnable(GL_CULL_FACE); glEnable(GL_DEPTH_TEST);
         }
 
+        if (fps_cap > 0) {
+            while (1) {
+                Uint64 frame_now_counter = SDL_GetPerformanceCounter();
+                double now_seconds = (double)frame_now_counter / (double)fps_perf_freq;
+                if (fps_next_deadline_seconds < now_seconds) fps_next_deadline_seconds = now_seconds;
+                double remaining_seconds = fps_next_deadline_seconds - now_seconds;
+                if (remaining_seconds <= 0.0) break;
+                if (remaining_seconds > 0.002) {
+                    SDL_Delay((Uint32)((remaining_seconds - 0.001) * 1000.0));
+                }
+            }
+        }
+
         SDL_GL_SwapWindow(window);
+        fps_next_deadline_seconds += 1.0 / (double)fps_cap;
+        fps_frame_start_counter = SDL_GetPerformanceCounter();
     }
 
     {
@@ -1013,6 +1193,11 @@ int main(void) {
             fclose(pf);
         }
     }
+
+    settings.fps_cap = fps_cap;
+    settings.render_distance_chunks = render_distance_chunks;
+    settings.gravity_enabled = gravity_enabled;
+    save_settings("Savefiles/settings.cfg", &settings);
 
     world_save_all_dirty(world);
     world_free(world);
