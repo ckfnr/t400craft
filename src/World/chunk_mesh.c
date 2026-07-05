@@ -175,9 +175,9 @@ static void build_lightmap_from_cache(Chunk* chunk, Chunk* neighbors[4],
 }
 
 static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
-                     float x, float y, float z, int face, BlockType type, float light, const float* ch) {
+                     float x, float y, float z, int face, BlockType type, float light, float shadow, const float* ch) {
     static const float face_dim[] = {1.0f, 0.6f, 0.8f, 0.8f, 0.7f, 0.7f};
-    float b = light * face_dim[face];
+    float b = light * face_dim[face] * shadow;
     float layer = (float)block_face_texture_layer(type, face);
     float positions[4][3];
     switch (face) {
@@ -259,6 +259,76 @@ static Block* mesh_cell(Chunk* chunk, Chunk* neighbors[4], int nx, int ny, int n
     return                         neighbors[3] ? &neighbors[3]->blocks[nx][ny][0] : NULL;
 }
 
+static int mesh_cell_opaque(Chunk* chunk, Chunk* neighbors[4], int nx, int ny, int nz) {
+    Block* b = mesh_cell(chunk, neighbors, nx, ny, nz);
+    return b && block_opaque(b->type);
+}
+
+static float face_shadow_factor(Chunk* chunk, Chunk* neighbors[4], int x, int y, int z, int face) {
+    if (face == 0) return 1.0f;
+    static const int face_axes[6][6] = {
+        {1, 0, 0, 0, 0, 1},
+        {1, 0, 0, 0, 0, 1},
+        {1, 0, 0, 0, 1, 0},
+        {1, 0, 0, 0, 1, 0},
+        {0, 1, 0, 0, 0, 1},
+        {0, 1, 0, 0, 0, 1},
+    };
+    static const int corner_signs[4][2] = {
+        {-1, -1},
+        { 1, -1},
+        { 1,  1},
+        {-1,  1},
+    };
+
+    const int* axis = face_axes[face];
+    int ux = axis[0], uy = axis[1], uz = axis[2];
+    int vx = axis[3], vy = axis[4], vz = axis[5];
+    float total = 0.0f;
+
+    for (int i = 0; i < 4; i++) {
+        int su = corner_signs[i][0];
+        int sv = corner_signs[i][1];
+        int side_u = mesh_cell_opaque(chunk, neighbors, x + su * ux, y + su * uy, z + su * uz);
+        int side_v = mesh_cell_opaque(chunk, neighbors, x + sv * vx, y + sv * vy, z + sv * vz);
+        int corner = mesh_cell_opaque(chunk, neighbors,
+            x + su * ux + sv * vx,
+            y + su * uy + sv * vy,
+            z + su * uz + sv * vz);
+
+        float shade = 1.0f;
+        shade -= 0.16f * (float)(side_u + side_v);
+        shade -= 0.10f * (float)corner;
+        if (side_u && side_v) shade -= 0.10f;
+        if (shade < 0.42f) shade = 0.42f;
+        total += shade;
+    }
+
+    return total * 0.25f;
+}
+
+static float canopy_shadow_factor(Chunk* chunk, Chunk* neighbors[4], int x, int y, int z) {
+    float occlusion = 0.0f;
+    for (int dy = 1; dy <= 8 && y + dy < CHUNK_SIZE_Y; dy++) {
+        float height_weight = 1.0f / (float)dy;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                Block* b = mesh_cell(chunk, neighbors, x + dx, y + dy, z + dz);
+                if (!b || !block_opaque(b->type)) continue;
+                float footprint = 1.0f;
+                if (dx != 0) footprint *= 0.65f;
+                if (dz != 0) footprint *= 0.65f;
+                occlusion += height_weight * footprint;
+            }
+        }
+    }
+
+    float shadow = 1.0f - occlusion * 0.18f;
+    if (shadow < 0.42f) shadow = 0.42f;
+    if (shadow > 1.0f) shadow = 1.0f;
+    return shadow;
+}
+
 static float water_surface_h(uint8_t lvl) {
     if (lvl >= WATER_LEVEL_FALLING) return 1.0f;
     if (lvl == WATER_LEVEL_SOURCE)  return 0.875f;
@@ -294,8 +364,8 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
     static const int dy[] = {1,-1, 0, 0,  0, 0};
     static const int dz[] = {0, 0, 1,-1,  0, 0};
     static const float light_table[16] = {
-        0.30f, 0.35f, 0.40f, 0.45f, 0.50f, 0.55f, 0.60f, 0.65f,
-        0.70f, 0.75f, 0.80f, 0.85f, 0.90f, 0.94f, 0.97f, 1.00f
+        0.07f, 0.09f, 0.12f, 0.15f, 0.19f, 0.24f, 0.30f, 0.37f,
+        0.45f, 0.54f, 0.63f, 0.72f, 0.81f, 0.89f, 0.95f, 1.00f
     };
 
     static GLfloat verts[MAX_VERTICES * 9];
@@ -360,14 +430,17 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
                     } else {
                         lv = light_table[ext_light[nx+1][ny][EXT_Z-1]];
                     }
+                    float shadow = face_shadow_factor(chunk, neighbors, x, y, z, face);
+                    if (face == 0)
+                        shadow *= canopy_shadow_factor(chunk, neighbors, x, y, z);
                     if (is_water)
                         add_face(wverts, winds, &wvc, &wic,
                                  (float)x, (float)y, (float)z,
-                                 face, type, lv, wch);
+                                 face, type, lv, shadow, wch);
                     else
                         add_face(verts, inds, &vc, &ic,
                                  (float)x, (float)y, (float)z,
-                                 face, type, lv, NULL);
+                                 face, type, lv, shadow, NULL);
                 }
             }
         }
