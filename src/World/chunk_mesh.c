@@ -270,7 +270,7 @@ static Block* mesh_cell(Chunk* chunk, Chunk* neighbors[4], int nx, int ny, int n
 
 static int mesh_cell_opaque(Chunk* chunk, Chunk* neighbors[4], int nx, int ny, int nz) {
     Block* b = mesh_cell(chunk, neighbors, nx, ny, nz);
-    return b && block_opaque(b->type);
+    return b && block_opaque(b->type) && b->type != BLOCK_GLASS;
 }
 
 static float face_shadow_factor(Chunk* chunk, Chunk* neighbors[4], int x, int y, int z, int face) {
@@ -324,7 +324,7 @@ static float canopy_shadow_factor(Chunk* chunk, Chunk* neighbors[4], int x, int 
             for (int dz = -1; dz <= 1; dz++) {
                 Block* b = mesh_cell(chunk, neighbors, x + dx, y + dy, z + dz);
                 if (!b || !block_opaque(b->type)) continue;
-                float footprint = 1.0f;
+                float footprint = b->type == BLOCK_GLASS ? 0.1f : 1.0f;
                 if (dx != 0) footprint *= 0.65f;
                 if (dz != 0) footprint *= 0.65f;
                 occlusion += height_weight * footprint;
