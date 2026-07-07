@@ -7,12 +7,13 @@
 #include <math.h>
 
 static void slot_index(int cx, int cz, int center_cx, int center_cz, int* out_idx) {
-    int lx = cx - (center_cx - WORLD_RADIUS);
-    int lz = cz - (center_cz - WORLD_RADIUS);
-    if (lx < 0 || lx >= WORLD_DIAMETER || lz < 0 || lz >= WORLD_DIAMETER) {
+    if (cx < center_cx - WORLD_RADIUS || cx > center_cx + WORLD_RADIUS ||
+        cz < center_cz - WORLD_RADIUS || cz > center_cz + WORLD_RADIUS) {
         *out_idx = -1;
         return;
     }
+    int lx = ((cx % WORLD_DIAMETER) + WORLD_DIAMETER) % WORLD_DIAMETER;
+    int lz = ((cz % WORLD_DIAMETER) + WORLD_DIAMETER) % WORLD_DIAMETER;
     *out_idx = lz * WORLD_DIAMETER + lx;
 }
 
@@ -32,22 +33,33 @@ static void load_or_generate(World* world, int slot_idx, int cx, int cz) {
 
     char path[512];
     save_path(world, cx, cz, path, sizeof(path));
+    long n = (long)CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
+    int has_levels = 0;
+    uint8_t* buf = NULL;
     FILE* f = fopen(path, "rb");
     if (f) {
         fseek(f, 0, SEEK_END);
         long fsz = ftell(f);
         fseek(f, 0, SEEK_SET);
-        int has_levels = (fsz >= 2L * CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z);
+        has_levels = (fsz >= 2L * n);
+        long total = has_levels ? 2L * n : n;
+        buf = malloc((size_t)total);
+        if (buf) {
+            size_t got = fread(buf, 1, (size_t)total, f);
+            if (got < (size_t)total)
+                memset(buf + got, 0, (size_t)total - got);
+        }
+        fclose(f);
+    }
+    if (buf) {
+        long i = 0;
         for (int x = 0; x < CHUNK_SIZE_X; x++)
             for (int y = 0; y < CHUNK_SIZE_Y; y++)
                 for (int z = 0; z < CHUNK_SIZE_Z; z++) {
-                    uint8_t t, l = 0;
-                    if (fread(&t, 1, 1, f) == 1)
-                        s->chunk.blocks[x][y][z].type = (BlockType)t;
-                    if (has_levels && fread(&l, 1, 1, f) != 1) l = 0;
-                    s->chunk.blocks[x][y][z].level = l;
+                    s->chunk.blocks[x][y][z].type = (BlockType)buf[i++];
+                    s->chunk.blocks[x][y][z].level = has_levels ? buf[i++] : 0;
                 }
-        fclose(f);
+        free(buf);
     } else {
         chunk_generate(&s->chunk, cx, cz);
     }
@@ -59,11 +71,35 @@ static void load_or_generate(World* world, int slot_idx, int cx, int cz) {
                         cx * CHUNK_SIZE_X + x, y, cz * CHUNK_SIZE_Z + z);
 }
 
+static void save_slot_file(World* world, WorldSlot* s) {
+    char path[512];
+    save_path(world, s->chunk.cx, s->chunk.cz, path, sizeof(path));
+    FILE* f = fopen(path, "wb");
+    if (!f) return;
+    long n = (long)CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
+    uint8_t* buf = malloc((size_t)(2L * n));
+    if (!buf) {
+        fclose(f);
+        return;
+    }
+    long i = 0;
+    for (int x = 0; x < CHUNK_SIZE_X; x++)
+        for (int y = 0; y < CHUNK_SIZE_Y; y++)
+            for (int z = 0; z < CHUNK_SIZE_Z; z++) {
+                buf[i++] = (uint8_t)s->chunk.blocks[x][y][z].type;
+                buf[i++] = s->chunk.blocks[x][y][z].level;
+            }
+    fwrite(buf, 1, (size_t)(2L * n), f);
+    free(buf);
+    fclose(f);
+    s->chunk.dirty = 0;
+}
+
 static void unload_slot(World* world, int slot_idx) {
     WorldSlot* s = &world->slots[slot_idx];
     if (!s->loaded) return;
     if (s->chunk.dirty)
-        world_save_chunk(world, s->chunk.cx, s->chunk.cz);
+        save_slot_file(world, s);
     if (s->mesh_valid) {
         mesh_delete(&s->mesh);
         mesh_delete(&s->water_mesh);
@@ -85,7 +121,9 @@ static void mark_neighbor_meshes_dirty(World* world, int cx, int cz) {
 }
 
 static void load_missing_slot(World* world, int idx, int cx, int cz) {
-    if (world->slots[idx].loaded) return;
+    WorldSlot* s = &world->slots[idx];
+    if (s->loaded && s->chunk.cx == cx && s->chunk.cz == cz) return;
+    if (s->loaded) unload_slot(world, idx);
     load_or_generate(world, idx, cx, cz);
     mark_neighbor_meshes_dirty(world, cx, cz);
 }
@@ -99,11 +137,10 @@ void world_init(World* world, int center_cx, int center_cz, const char* save_dir
 
     mkdir(save_dir, 0755);
 
-    for (int lz = 0; lz < WORLD_DIAMETER; lz++) {
-        for (int lx = 0; lx < WORLD_DIAMETER; lx++) {
-            int cx = (center_cx - WORLD_RADIUS) + lx;
-            int cz = (center_cz - WORLD_RADIUS) + lz;
-            int idx = lz * WORLD_DIAMETER + lx;
+    for (int cz = center_cz - WORLD_RADIUS; cz <= center_cz + WORLD_RADIUS; cz++) {
+        for (int cx = center_cx - WORLD_RADIUS; cx <= center_cx + WORLD_RADIUS; cx++) {
+            int idx;
+            slot_index(cx, cz, center_cx, center_cz, &idx);
             load_or_generate(world, idx, cx, cz);
         }
     }
@@ -121,24 +158,9 @@ void world_free(World* world) {
 }
 
 void world_save_chunk(World* world, int cx, int cz) {
-    int idx;
-    slot_index(cx, cz, world->center_cx, world->center_cz, &idx);
-    if (idx < 0 || !world->slots[idx].loaded) return;
-    WorldSlot* s = &world->slots[idx];
-    char path[512];
-    save_path(world, cx, cz, path, sizeof(path));
-    FILE* f = fopen(path, "wb");
-    if (!f) return;
-    for (int x = 0; x < CHUNK_SIZE_X; x++)
-        for (int y = 0; y < CHUNK_SIZE_Y; y++)
-            for (int z = 0; z < CHUNK_SIZE_Z; z++) {
-                uint8_t t = (uint8_t)s->chunk.blocks[x][y][z].type;
-                uint8_t l = s->chunk.blocks[x][y][z].level;
-                fwrite(&t, 1, 1, f);
-                fwrite(&l, 1, 1, f);
-            }
-    fclose(f);
-    s->chunk.dirty = 0;
+    WorldSlot* s = world_get_slot(world, cx, cz);
+    if (!s) return;
+    save_slot_file(world, s);
 }
 
 void world_save_all_dirty(World* world) {
@@ -151,69 +173,16 @@ void world_save_all_dirty(World* world) {
 void world_update_center(World* world, int new_cx, int new_cz) {
     if (new_cx == world->center_cx && new_cz == world->center_cz) return;
 
-    int old_cx = world->center_cx;
-    int old_cz = world->center_cz;
-
-    WorldSlot* old_slots = malloc(sizeof(WorldSlot) * WORLD_SLOTS);
-    if (!old_slots) return;
-    memcpy(old_slots, world->slots, sizeof(WorldSlot) * WORLD_SLOTS);
-
     world->center_cx = new_cx;
     world->center_cz = new_cz;
 
-    for (int lz = 0; lz < WORLD_DIAMETER; lz++) {
-        for (int lx = 0; lx < WORLD_DIAMETER; lx++) {
-            int idx = lz * WORLD_DIAMETER + lx;
-            int cx = (new_cx - WORLD_RADIUS) + lx;
-            int cz = (new_cz - WORLD_RADIUS) + lz;
-
-            int old_lx = cx - (old_cx - WORLD_RADIUS);
-            int old_lz = cz - (old_cz - WORLD_RADIUS);
-            int old_idx = -1;
-            if (old_lx >= 0 && old_lx < WORLD_DIAMETER && old_lz >= 0 && old_lz < WORLD_DIAMETER)
-                old_idx = old_lz * WORLD_DIAMETER + old_lx;
-
-            if (old_idx >= 0 && old_slots[old_idx].loaded
-                && old_slots[old_idx].chunk.cx == cx
-                && old_slots[old_idx].chunk.cz == cz) {
-                world->slots[idx] = old_slots[old_idx];
-                old_slots[old_idx].loaded = 0;
-                old_slots[old_idx].mesh_valid = 0;
-            } else {
-                world->slots[idx].loaded = 0;
-                world->slots[idx].mesh_valid = 0;
-            }
-        }
-    }
-
     for (int i = 0; i < WORLD_SLOTS; i++) {
-        if (old_slots[i].loaded) {
-            if (old_slots[i].chunk.dirty) {
-                int cx = old_slots[i].chunk.cx;
-                int cz = old_slots[i].chunk.cz;
-                char path[512];
-                save_path(world, cx, cz, path, sizeof(path));
-                FILE* f = fopen(path, "wb");
-                if (f) {
-                    Chunk* c = &old_slots[i].chunk;
-                    for (int x = 0; x < CHUNK_SIZE_X; x++)
-                        for (int y = 0; y < CHUNK_SIZE_Y; y++)
-                            for (int z = 0; z < CHUNK_SIZE_Z; z++) {
-                                uint8_t t = (uint8_t)c->blocks[x][y][z].type;
-                                uint8_t l = c->blocks[x][y][z].level;
-                                fwrite(&t, 1, 1, f);
-                                fwrite(&l, 1, 1, f);
-                            }
-                    fclose(f);
-                }
-            }
-            if (old_slots[i].mesh_valid) {
-                mesh_delete(&old_slots[i].mesh);
-                mesh_delete(&old_slots[i].water_mesh);
-            }
-        }
+        WorldSlot* s = &world->slots[i];
+        if (!s->loaded) continue;
+        if (abs(s->chunk.cx - new_cx) > WORLD_RADIUS ||
+            abs(s->chunk.cz - new_cz) > WORLD_RADIUS)
+            unload_slot(world, i);
     }
-    free(old_slots);
 }
 
 void world_stream_missing(World* world, int budget) {
@@ -229,7 +198,9 @@ void world_stream_missing(World* world, int budget) {
                 if (abs(cx - world->center_cx) != ring && abs(cz - world->center_cz) != ring) continue;
                 int idx;
                 slot_index(cx, cz, world->center_cx, world->center_cz, &idx);
-                if (idx < 0 || world->slots[idx].loaded) continue;
+                if (idx < 0) continue;
+                WorldSlot* s = &world->slots[idx];
+                if (s->loaded && s->chunk.cx == cx && s->chunk.cz == cz) continue;
                 load_missing_slot(world, idx, cx, cz);
                 budget--;
             }
@@ -240,6 +211,7 @@ WorldSlot* world_get_slot(World* world, int cx, int cz) {
     int idx;
     slot_index(cx, cz, world->center_cx, world->center_cz, &idx);
     if (idx < 0 || !world->slots[idx].loaded) return NULL;
+    if (world->slots[idx].chunk.cx != cx || world->slots[idx].chunk.cz != cz) return NULL;
     return &world->slots[idx];
 }
 
