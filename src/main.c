@@ -151,7 +151,7 @@ typedef struct {
     int is_bucket;
 } ItemDef;
 
-#define ITEM_COUNT 7
+#define ITEM_COUNT 8
 static const ItemDef item_defs[ITEM_COUNT] = {
     {NULL,                            BLOCK_AIR,         0},
     {"src/textures/cobblestone.png",  BLOCK_COBBLESTONE, 0},
@@ -160,6 +160,7 @@ static const ItemDef item_defs[ITEM_COUNT] = {
     {"src/textures/dirtblock.png",    BLOCK_DIRT,        0},
     {"src/textures/water_bucket.png", BLOCK_AIR,         1},
     {"src/textures/oaklog_side.png",  BLOCK_OAK_LOG,     0},
+    {"src/textures/oak_leaves.png",   BLOCK_OAK_LEAVES,  0},
 };
 
 #define INV_SIZE 36
@@ -540,8 +541,9 @@ int main(void) {
         "src/textures/water.png",
         "src/textures/oaklog_side.png",
         "src/textures/oaklog_top.png",
+        "src/textures/oak_leaves.png",
     };
-    GLuint texture = load_texture_array(world_textures, 8);
+    GLuint texture = load_texture_array(world_textures, 9);
 
     int buttonW, buttonH, buttonCh;
     unsigned char* buttonBytes = stbi_load("src/UI/button.png", &buttonW, &buttonH, &buttonCh, 4);
@@ -586,6 +588,13 @@ int main(void) {
     int inventory[INV_SIZE] = {0};
     for (int i = 1; i < ITEM_COUNT; i++) inventory[INV_HOTBAR_START + i - 1] = i;
     load_inventory("Savefiles/inventory.bin", inventory);
+    for (int i = 1; i < ITEM_COUNT; i++) {
+        int present = 0;
+        for (int j = 0; j < INV_SIZE; j++) if (inventory[j] == i) present = 1;
+        if (!present)
+            for (int j = 0; j < INV_SIZE; j++)
+                if (inventory[j] == 0) { inventory[j] = i; break; }
+    }
     int selected_slot = 0;
     int inventory_open = 0;
     int drag_item = 0, drag_from = -1;

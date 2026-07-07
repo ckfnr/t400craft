@@ -20,12 +20,17 @@ static int block_face_texture_layer(BlockType type, int face) {
         case BLOCK_OAK_LOG:
             if (face == 0 || face == 1) return 7;
             return 6;
+        case BLOCK_OAK_LEAVES:  return 8;
         case BLOCK_AIR:
         default:                return 0;
     }
 }
 
 typedef struct { short x, y, z; } LightNode;
+
+static uint8_t light_solid(BlockType type) {
+    return (uint8_t)(block_opaque(type) && !block_transparent(type));
+}
 
 #define EXT_X (CHUNK_SIZE_X + 2)
 #define EXT_Z (CHUNK_SIZE_Z + 2)
@@ -62,7 +67,7 @@ void chunk_compute_lightmap(Chunk* chunk,
             if (nx < 0 || nx >= CHUNK_SIZE_X) continue;
             if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
             if (nz < 0 || nz >= CHUNK_SIZE_Z) continue;
-            if (block_opaque(chunk->blocks[nx][ny][nz].type)) continue;
+            if (light_solid(chunk->blocks[nx][ny][nz].type)) continue;
             if (light[nx][ny][nz] >= lv - 1) continue;
             light[nx][ny][nz] = (uint8_t)(lv - 1);
             local_queue[tail++] = (LightNode){(short)nx, (short)ny, (short)nz};
@@ -86,16 +91,16 @@ static void build_lightmap_from_cache(Chunk* chunk, Chunk* neighbors[4],
     for (int x = 0; x < CHUNK_SIZE_X; x++)
         for (int y = 0; y < CHUNK_SIZE_Y; y++)
             for (int z = 0; z < CHUNK_SIZE_Z; z++)
-                ext_solid[x+1][y][z+1] = (uint8_t)block_opaque(chunk->blocks[x][y][z].type);
+                ext_solid[x+1][y][z+1] = light_solid(chunk->blocks[x][y][z].type);
 
     for (int y = 0; y < CHUNK_SIZE_Y; y++) {
         for (int z = 0; z < CHUNK_SIZE_Z; z++) {
-            if (nbc[0]) ext_solid[0][y][z+1]       = (uint8_t)block_opaque(nbc[0]->blocks[CHUNK_SIZE_X-1][y][z].type);
-            if (nbc[1]) ext_solid[EXT_X-1][y][z+1] = (uint8_t)block_opaque(nbc[1]->blocks[0][y][z].type);
+            if (nbc[0]) ext_solid[0][y][z+1]       = light_solid(nbc[0]->blocks[CHUNK_SIZE_X-1][y][z].type);
+            if (nbc[1]) ext_solid[EXT_X-1][y][z+1] = light_solid(nbc[1]->blocks[0][y][z].type);
         }
         for (int x = 0; x < CHUNK_SIZE_X; x++) {
-            if (nbc[2]) ext_solid[x+1][y][0]       = (uint8_t)block_opaque(nbc[2]->blocks[x][y][CHUNK_SIZE_Z-1].type);
-            if (nbc[3]) ext_solid[x+1][y][EXT_Z-1] = (uint8_t)block_opaque(nbc[3]->blocks[x][y][0].type);
+            if (nbc[2]) ext_solid[x+1][y][0]       = light_solid(nbc[2]->blocks[x][y][CHUNK_SIZE_Z-1].type);
+            if (nbc[3]) ext_solid[x+1][y][EXT_Z-1] = light_solid(nbc[3]->blocks[x][y][0].type);
         }
     }
 
@@ -413,9 +418,9 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
                         }
                     }
                     if (is_water) {
-                        if (have_n && ntype != BLOCK_AIR) continue;
+                        if (have_n && ntype != BLOCK_AIR && !block_transparent(ntype)) continue;
                     } else {
-                        if (have_n && block_opaque(ntype)) continue;
+                        if (have_n && block_opaque(ntype) && !block_transparent(ntype)) continue;
                     }
                     float lv;
                     if (!dynamic) {
