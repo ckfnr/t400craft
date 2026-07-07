@@ -11,6 +11,7 @@ typedef enum {
     BLOCK_STONE,
     BLOCK_OAK_PLANKS,
     BLOCK_WATER,
+    BLOCK_OAK_LOG,
 } BlockType;
 
 #define WATER_LEVEL_SOURCE  8

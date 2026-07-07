@@ -438,8 +438,10 @@ int main(void) {
         "src/textures/cobblestone.png",
         "src/textures/oak_planks.png",
         "src/textures/water.png",
+        "src/textures/oaklog_side.png",
+        "src/textures/oaklog_top.png",
     };
-    GLuint texture = load_texture_array(world_textures, 6);
+    GLuint texture = load_texture_array(world_textures, 8);
 
     int buttonW, buttonH, buttonCh;
     unsigned char* buttonBytes = stbi_load("src/UI/button.png", &buttonW, &buttonH, &buttonCh, 4);
@@ -471,12 +473,13 @@ int main(void) {
         "src/textures/grass_side.png",
         "src/textures/dirtblock.png",
         "src/textures/water_bucket.png",
-        NULL, NULL, NULL, NULL,
+        "src/textures/oaklog_side.png",
+        NULL, NULL, NULL,
     };
     const BlockType hotbar_blocks[9] = {
         BLOCK_COBBLESTONE, BLOCK_OAK_PLANKS,
         BLOCK_GRASS, BLOCK_DIRT,
-        BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR,
+        BLOCK_AIR, BLOCK_OAK_LOG, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR,
     };
     const int hotbar_is_bucket[9] = {0, 0, 0, 0, 1, 0, 0, 0, 0};
     GLuint hotbar_textures[9] = {0};
