@@ -13,6 +13,7 @@ typedef enum {
     BLOCK_WATER,
     BLOCK_OAK_LOG,
     BLOCK_OAK_LEAVES,
+    BLOCK_GLASS,
 } BlockType;
 
 #define WATER_LEVEL_SOURCE  8
@@ -28,7 +29,11 @@ static inline int block_opaque(BlockType type) {
 }
 
 static inline int block_transparent(BlockType type) {
-    return type == BLOCK_OAK_LEAVES;
+    return type == BLOCK_OAK_LEAVES || type == BLOCK_GLASS;
+}
+
+static inline int block_stops_skylight(BlockType type) {
+    return block_opaque(type) && type != BLOCK_GLASS;
 }
 
 #endif

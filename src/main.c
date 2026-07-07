@@ -151,7 +151,7 @@ typedef struct {
     int is_bucket;
 } ItemDef;
 
-#define ITEM_COUNT 8
+#define ITEM_COUNT 9
 static const ItemDef item_defs[ITEM_COUNT] = {
     {NULL,                            BLOCK_AIR,         0},
     {"src/textures/cobblestone.png",  BLOCK_COBBLESTONE, 0},
@@ -161,6 +161,7 @@ static const ItemDef item_defs[ITEM_COUNT] = {
     {"src/textures/water_bucket.png", BLOCK_AIR,         1},
     {"src/textures/oaklog_side.png",  BLOCK_OAK_LOG,     0},
     {"src/textures/oak_leaves.png",   BLOCK_OAK_LEAVES,  0},
+    {"src/textures/glass_block.png",  BLOCK_GLASS,       0},
 };
 
 #define INV_SIZE 36
@@ -542,8 +543,9 @@ int main(void) {
         "src/textures/oaklog_side.png",
         "src/textures/oaklog_top.png",
         "src/textures/oak_leaves.png",
+        "src/textures/glass_block.png",
     };
-    GLuint texture = load_texture_array(world_textures, 9);
+    GLuint texture = load_texture_array(world_textures, 10);
 
     int buttonW, buttonH, buttonCh;
     unsigned char* buttonBytes = stbi_load("src/UI/button.png", &buttonW, &buttonH, &buttonCh, 4);

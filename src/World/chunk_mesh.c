@@ -21,6 +21,7 @@ static int block_face_texture_layer(BlockType type, int face) {
             if (face == 0 || face == 1) return 7;
             return 6;
         case BLOCK_OAK_LEAVES:  return 8;
+        case BLOCK_GLASS:       return 9;
         case BLOCK_AIR:
         default:                return 0;
     }
@@ -49,7 +50,7 @@ void chunk_compute_lightmap(Chunk* chunk,
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
         for (int z = 0; z < CHUNK_SIZE_Z; z++) {
             for (int y = CHUNK_SIZE_Y - 1; y >= 0; y--) {
-                if (block_opaque(chunk->blocks[x][y][z].type)) break;
+                if (block_stops_skylight(chunk->blocks[x][y][z].type)) break;
                 light[x][y][z] = MAX_LIGHT;
                 local_queue[tail++] = (LightNode){(short)x, (short)y, (short)z};
             }
@@ -109,7 +110,7 @@ static void build_lightmap_from_cache(Chunk* chunk, Chunk* neighbors[4],
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
         for (int z = 0; z < CHUNK_SIZE_Z; z++) {
             for (int y = CHUNK_SIZE_Y - 1; y >= 0; y--) {
-                if (block_opaque(chunk->blocks[x][y][z].type)) break;
+                if (block_stops_skylight(chunk->blocks[x][y][z].type)) break;
                 ext_light[x+1][y][z+1] = MAX_LIGHT;
                 ext_queue[tail] = (LightNode){(short)(x+1), (short)y, (short)(z+1)};
                 tail = (tail + 1) % EXT_QCAP;
@@ -421,6 +422,7 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
                         if (have_n && ntype != BLOCK_AIR && !block_transparent(ntype)) continue;
                     } else {
                         if (have_n && block_opaque(ntype) && !block_transparent(ntype)) continue;
+                        if (have_n && type == BLOCK_GLASS && ntype == BLOCK_GLASS) continue;
                     }
                     float lv;
                     if (!dynamic) {
