@@ -146,6 +146,106 @@ static int point_in_rect(int px, int py, float x, float y, float rw, float rh) {
 static int block_is_solid(BlockType type) { return block_opaque(type); }
 
 typedef struct {
+    const char* tex_path;
+    BlockType block;
+    int is_bucket;
+} ItemDef;
+
+#define ITEM_COUNT 7
+static const ItemDef item_defs[ITEM_COUNT] = {
+    {NULL,                            BLOCK_AIR,         0},
+    {"src/textures/cobblestone.png",  BLOCK_COBBLESTONE, 0},
+    {"src/textures/oak_planks.png",   BLOCK_OAK_PLANKS,  0},
+    {"src/textures/grass_side.png",   BLOCK_GRASS,       0},
+    {"src/textures/dirtblock.png",    BLOCK_DIRT,        0},
+    {"src/textures/water_bucket.png", BLOCK_AIR,         1},
+    {"src/textures/oaklog_side.png",  BLOCK_OAK_LOG,     0},
+};
+
+#define INV_SIZE 36
+#define INV_MAIN_COUNT 27
+#define INV_HOTBAR_START 27
+
+typedef struct { float x, y, cell, pad, gap; } InvLayout;
+
+static void inventory_layout(int screen_w, int screen_h, InvLayout* L) {
+    float cell = (float)screen_h * 0.07f;
+    if (cell < 20.0f) cell = 20.0f;
+    if (cell > 64.0f) cell = 64.0f;
+    L->cell = cell;
+    L->pad = cell * 0.1f;
+    L->gap = cell * 0.6f;
+    float grid_w = 9.0f * cell + 8.0f * L->pad;
+    float grid_h = 4.0f * cell + 3.0f * L->pad + L->gap;
+    L->x = ((float)screen_w - grid_w) * 0.5f;
+    L->y = ((float)screen_h - grid_h) * 0.5f;
+}
+
+static void inventory_slot_rect(const InvLayout* L, int slot, float* rx, float* ry) {
+    if (slot < INV_MAIN_COUNT) {
+        *rx = L->x + (float)(slot % 9) * (L->cell + L->pad);
+        *ry = L->y + (float)(slot / 9) * (L->cell + L->pad);
+    } else {
+        *rx = L->x + (float)(slot - INV_HOTBAR_START) * (L->cell + L->pad);
+        *ry = L->y + 3.0f * (L->cell + L->pad) + L->gap;
+    }
+}
+
+static int inventory_slot_at(const InvLayout* L, float mx, float my) {
+    for (int i = 0; i < INV_SIZE; i++) {
+        float rx, ry;
+        inventory_slot_rect(L, i, &rx, &ry);
+        if (mx >= rx && mx <= rx + L->cell && my >= ry && my <= ry + L->cell) return i;
+    }
+    return -1;
+}
+
+static void inventory_shift_click(int* inv, int slot) {
+    if (inv[slot] == 0) return;
+    int start = slot < INV_MAIN_COUNT ? INV_HOTBAR_START : 0;
+    int end   = slot < INV_MAIN_COUNT ? INV_SIZE : INV_MAIN_COUNT;
+    for (int i = start; i < end; i++)
+        if (inv[i] == 0) {
+            inv[i] = inv[slot];
+            inv[slot] = 0;
+            return;
+        }
+}
+
+static void inventory_put_back(int* inv, int* drag_item, int* drag_from) {
+    if (*drag_item) {
+        if (*drag_from >= 0 && inv[*drag_from] == 0) {
+            inv[*drag_from] = *drag_item;
+        } else {
+            for (int i = 0; i < INV_SIZE; i++)
+                if (inv[i] == 0) { inv[i] = *drag_item; break; }
+        }
+    }
+    *drag_item = 0;
+    *drag_from = -1;
+}
+
+static void load_inventory(const char* path, int* inv) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return;
+    uint8_t buf[INV_SIZE];
+    if (fread(buf, 1, INV_SIZE, f) == INV_SIZE)
+        for (int i = 0; i < INV_SIZE; i++)
+            inv[i] = buf[i] < ITEM_COUNT ? buf[i] : 0;
+    fclose(f);
+}
+
+static void save_inventory(const char* path, const int* inv) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return;
+    uint8_t buf[INV_SIZE];
+    for (int i = 0; i < INV_SIZE; i++)
+        buf[i] = (uint8_t)inv[i];
+    fwrite(buf, 1, INV_SIZE, f);
+    fclose(f);
+}
+
+typedef struct {
     int hit;
     int block_x, block_y, block_z;
     int place_x, place_y, place_z;
@@ -467,30 +567,14 @@ int main(void) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, crossW, crossH, 0, GL_RGBA, GL_UNSIGNED_BYTE, crossBytes);
     stbi_image_free(crossBytes); glBindTexture(GL_TEXTURE_2D, 0);
 
-    const char* hotbar_tex_paths[9] = {
-        "src/textures/cobblestone.png",
-        "src/textures/oak_planks.png",
-        "src/textures/grass_side.png",
-        "src/textures/dirtblock.png",
-        "src/textures/water_bucket.png",
-        "src/textures/oaklog_side.png",
-        NULL, NULL, NULL,
-    };
-    const BlockType hotbar_blocks[9] = {
-        BLOCK_COBBLESTONE, BLOCK_OAK_PLANKS,
-        BLOCK_GRASS, BLOCK_DIRT,
-        BLOCK_AIR, BLOCK_OAK_LOG, BLOCK_AIR, BLOCK_AIR, BLOCK_AIR,
-    };
-    const int hotbar_is_bucket[9] = {0, 0, 0, 0, 1, 0, 0, 0, 0};
-    GLuint hotbar_textures[9] = {0};
-    for (int i = 0; i < 9; i++) {
-        if (!hotbar_tex_paths[i]) continue;
+    GLuint item_textures[ITEM_COUNT] = {0};
+    for (int i = 1; i < ITEM_COUNT; i++) {
         int hw2, hh2, hch2;
-        unsigned char* hb = stbi_load(hotbar_tex_paths[i], &hw2, &hh2, &hch2, 4);
+        unsigned char* hb = stbi_load(item_defs[i].tex_path, &hw2, &hh2, &hch2, 4);
         if (!hb) continue;
-        glGenTextures(1, &hotbar_textures[i]);
+        glGenTextures(1, &item_textures[i]);
         glActiveTexture(GL_TEXTURE3);
-        glBindTexture(GL_TEXTURE_2D, hotbar_textures[i]);
+        glBindTexture(GL_TEXTURE_2D, item_textures[i]);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -499,7 +583,12 @@ int main(void) {
         stbi_image_free(hb);
         glBindTexture(GL_TEXTURE_2D, 0);
     }
+    int inventory[INV_SIZE] = {0};
+    for (int i = 1; i < ITEM_COUNT; i++) inventory[INV_HOTBAR_START + i - 1] = i;
+    load_inventory("Savefiles/inventory.bin", inventory);
     int selected_slot = 0;
+    int inventory_open = 0;
+    int drag_item = 0, drag_from = -1;
 
     int spawn_wx = 8, spawn_wz = 8, spawn_y = 85;
     {
@@ -568,18 +657,34 @@ int main(void) {
             if (event.type == SDL_QUIT) running = 0;
             if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_F3)
                 show_fps = !show_fps;
-            if (event.type == SDL_MOUSEWHEEL && !paused) {
+            if (event.type == SDL_MOUSEWHEEL && !paused && !inventory_open) {
                 selected_slot = (selected_slot - event.wheel.y % 9 + 9) % 9;
             }
-            if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && !paused) {
+            if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && !paused && !inventory_open) {
                 SDL_Keycode k = event.key.keysym.sym;
                 if (k >= SDLK_1 && k <= SDLK_9) selected_slot = k - SDLK_1;
             }
+            if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_e && !paused) {
+                inventory_open = !inventory_open;
+                if (inventory_open) {
+                    mouse_right_held = 0;
+                    SDL_SetRelativeMouseMode(SDL_FALSE); SDL_ShowCursor(SDL_ENABLE);
+                } else {
+                    inventory_put_back(inventory, &drag_item, &drag_from);
+                    SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click = 1;
+                }
+            }
             if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_ESCAPE) {
-                paused = !paused;
-                paused_drag_slider = 0;
-                if (paused) { SDL_SetRelativeMouseMode(SDL_FALSE); SDL_ShowCursor(SDL_ENABLE); }
-                else { SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click = 1; }
+                if (inventory_open) {
+                    inventory_open = 0;
+                    inventory_put_back(inventory, &drag_item, &drag_from);
+                    SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click = 1;
+                } else {
+                    paused = !paused;
+                    paused_drag_slider = 0;
+                    if (paused) { SDL_SetRelativeMouseMode(SDL_FALSE); SDL_ShowCursor(SDL_ENABLE); }
+                    else { SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click = 1; }
+                }
             } else if (!paused && event.type == SDL_KEYDOWN && event.key.repeat == 0
                        && event.key.keysym.sym == SDLK_SPACE && gravity_enabled) {
                 (void)0;
@@ -613,7 +718,41 @@ int main(void) {
                 }
             } else if (paused && event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
                 paused_drag_slider = 0;
-            } else if (!paused && event.type == SDL_MOUSEBUTTONDOWN) {
+            } else if (!paused && inventory_open && event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
+                int sw=0, sh=0; SDL_GL_GetDrawableSize(window, &sw, &sh);
+                InvLayout inv_layout; inventory_layout(sw, sh, &inv_layout);
+                float mx=0.0f, my=0.0f;
+                ui_window_to_drawable(window, event.button.x, event.button.y, &mx, &my);
+                int slot = inventory_slot_at(&inv_layout, mx, my);
+                if (slot >= 0 && inventory[slot] != 0) {
+                    if (SDL_GetModState() & KMOD_SHIFT) {
+                        inventory_shift_click(inventory, slot);
+                    } else {
+                        drag_item = inventory[slot];
+                        drag_from = slot;
+                        inventory[slot] = 0;
+                    }
+                }
+            } else if (!paused && inventory_open && event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
+                if (drag_item) {
+                    int sw=0, sh=0; SDL_GL_GetDrawableSize(window, &sw, &sh);
+                    InvLayout inv_layout; inventory_layout(sw, sh, &inv_layout);
+                    float mx=0.0f, my=0.0f;
+                    ui_window_to_drawable(window, event.button.x, event.button.y, &mx, &my);
+                    int slot = inventory_slot_at(&inv_layout, mx, my);
+                    if (slot >= 0) {
+                        if (inventory[slot] != 0 && drag_from >= 0)
+                            inventory[drag_from] = inventory[slot];
+                        inventory[slot] = drag_item;
+                        drag_item = 0;
+                        drag_from = -1;
+                    } else {
+                        for (int i = 0; i < INV_MAIN_COUNT && drag_item; i++)
+                            if (inventory[i] == 0) { inventory[i] = drag_item; drag_item = 0; drag_from = -1; }
+                        inventory_put_back(inventory, &drag_item, &drag_from);
+                    }
+                }
+            } else if (!paused && !inventory_open && event.type == SDL_MOUSEBUTTONDOWN) {
                 if (event.button.button == SDL_BUTTON_LEFT)       break_requested=1;
                 if (event.button.button == SDL_BUTTON_RIGHT)      mouse_right_held=1;
             } else if (event.type == SDL_MOUSEBUTTONUP) {
@@ -678,8 +817,10 @@ int main(void) {
         if (!paused) {
             int mouse_dx=0, mouse_dy=0;
             SDL_GetRelativeMouseState(&mouse_dx, &mouse_dy);
+            static const Uint8 locked_keys[SDL_NUM_SCANCODES];
             const Uint8* keys = SDL_GetKeyboardState(NULL);
-            camera_rotate(&cam, mouse_dx, mouse_dy);
+            if (inventory_open) keys = locked_keys;
+            else camera_rotate(&cam, mouse_dx, mouse_dy);
 
             vec3 wish_dir; int sprinting=0;
             camera_get_wish_dir(&cam, keys, wish_dir, &sprinting);
@@ -796,13 +937,14 @@ int main(void) {
 
             BlockSelection sel = {0};
             raycast_block_selection(world, cam.position, cam.orientation, reach_distance, &sel, 0);
+            const ItemDef* held_item = &item_defs[inventory[INV_HOTBAR_START + selected_slot]];
 
             if (break_requested && sel.hit) {
                 if (world_set_block(world, sel.block_x, sel.block_y, sel.block_z, BLOCK_AIR)) {
                     sel.hit=0; raycast_block_selection(world, cam.position, cam.orientation, reach_distance, &sel, 0);
                 }
             }
-            if (place_requested && hotbar_is_bucket[selected_slot]) {
+            if (place_requested && held_item->is_bucket) {
                 BlockSelection wsel = {0};
                 raycast_block_selection(world, cam.position, cam.orientation, reach_distance, &wsel, 1);
                 if (wsel.hit) {
@@ -820,14 +962,14 @@ int main(void) {
                 }
             } else if (place_requested && sel.hit) {
                 Block* pb = world_get_block(world, sel.place_x, sel.place_y, sel.place_z);
-                if (pb && !block_is_solid(pb->type) && hotbar_blocks[selected_slot] != BLOCK_AIR) {
+                if (pb && !block_is_solid(pb->type) && held_item->block != BLOCK_AIR) {
                     BlockType old_type = pb->type;
                     uint8_t old_level = pb->level;
-                    pb->type = hotbar_blocks[selected_slot];
+                    pb->type = held_item->block;
                     vec3 foot = {cam.position[0], real_y, cam.position[2]};
                     if (!player_collides_at_h(world, foot, cur_height)) {
                         pb->type = old_type; pb->level = old_level;
-                        world_set_block(world, sel.place_x, sel.place_y, sel.place_z, hotbar_blocks[selected_slot]);
+                        world_set_block(world, sel.place_x, sel.place_y, sel.place_z, held_item->block);
                         sel.hit=0; raycast_block_selection(world,cam.position,cam.orientation,reach_distance,&sel,0);
                     } else { pb->type = old_type; pb->level = old_level; }
                 }
@@ -989,7 +1131,8 @@ int main(void) {
                 glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
 
                 for (int si = 0; si < 9; si++) {
-                    if (!hotbar_textures[si]) continue;
+                    GLuint itex = item_textures[inventory[INV_HOTBAR_START + si]];
+                    if (!itex) continue;
                     float sx2 = hx + si * (slot_size + pad);
                     float inner = slot_size * 0.75f;
                     float ox = sx2 + (slot_size - inner) * 0.5f;
@@ -1005,11 +1148,93 @@ int main(void) {
                     glUseProgram(buttonProgram); glBindVertexArray(buttonVAO); glBindBuffer(GL_ARRAY_BUFFER, buttonVBO);
                     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(iv), iv);
                     glUniform2f(u_btn_screenSize, (float)screen_w, (float)screen_h);
-                    glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, hotbar_textures[si]);
+                    glActiveTexture(GL_TEXTURE3); glBindTexture(GL_TEXTURE_2D, itex);
                     glUniform1i(u_btn_tex, 3);
                     glDrawArrays(GL_TRIANGLES, 0, 6);
                     glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
                 }
+                glDisable(GL_BLEND); glEnable(GL_CULL_FACE); glEnable(GL_DEPTH_TEST);
+            }
+
+            if (inventory_open) {
+                glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
+                glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                InvLayout inv_layout; inventory_layout(screen_w, screen_h, &inv_layout);
+                float panel_pad = inv_layout.cell * 0.35f;
+                float grid_w = 9.0f * inv_layout.cell + 8.0f * inv_layout.pad;
+                float grid_h = 4.0f * inv_layout.cell + 3.0f * inv_layout.pad + inv_layout.gap;
+
+                glUseProgram(uiProgram); glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER, uiVBO);
+                glUniform2f(u_ui_screenSize, (float)screen_w, (float)screen_h);
+                float rect[12]; int rc = 0;
+                append_rect(rect, &rc, 0.0f, 0.0f, (float)screen_w, (float)screen_h);
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*rc, rect);
+                glUniform4f(u_ui_color, 0.0f, 0.0f, 0.0f, 0.45f);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+
+                rc = 0;
+                append_rect(rect, &rc, inv_layout.x - panel_pad, inv_layout.y - panel_pad,
+                            grid_w + 2.0f*panel_pad, grid_h + 2.0f*panel_pad);
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*rc, rect);
+                glUniform4f(u_ui_color, 0.12f, 0.12f, 0.12f, 0.92f);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+
+                glUniform4f(u_ui_color, 0.24f, 0.24f, 0.24f, 0.95f);
+                for (int i = 0; i < INV_SIZE; i++) {
+                    float rx, ry;
+                    inventory_slot_rect(&inv_layout, i, &rx, &ry);
+                    rc = 0;
+                    append_rect(rect, &rc, rx, ry, inv_layout.cell, inv_layout.cell);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*rc, rect);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                }
+                glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
+
+                glUseProgram(buttonProgram); glBindVertexArray(buttonVAO); glBindBuffer(GL_ARRAY_BUFFER, buttonVBO);
+                glUniform2f(u_btn_screenSize, (float)screen_w, (float)screen_h);
+                glUniform1i(u_btn_tex, 3);
+                glActiveTexture(GL_TEXTURE3);
+                float inner = inv_layout.cell * 0.75f;
+                for (int i = 0; i < INV_SIZE; i++) {
+                    GLuint itex = item_textures[inventory[i]];
+                    if (!itex) continue;
+                    float rx, ry;
+                    inventory_slot_rect(&inv_layout, i, &rx, &ry);
+                    float ox = rx + (inv_layout.cell - inner) * 0.5f;
+                    float oy = ry + (inv_layout.cell - inner) * 0.5f;
+                    float iv[24] = {
+                        ox,       oy,       0,0,
+                        ox+inner, oy,       1,0,
+                        ox+inner, oy+inner, 1,1,
+                        ox,       oy,       0,0,
+                        ox+inner, oy+inner, 1,1,
+                        ox,       oy+inner, 0,1,
+                    };
+                    glBindTexture(GL_TEXTURE_2D, itex);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(iv), iv);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                }
+                if (drag_item && item_textures[drag_item]) {
+                    int mwx = 0, mwy = 0;
+                    SDL_GetMouseState(&mwx, &mwy);
+                    float mx = 0.0f, my = 0.0f;
+                    ui_window_to_drawable(window, mwx, mwy, &mx, &my);
+                    float ox = mx - inner * 0.5f;
+                    float oy = my - inner * 0.5f;
+                    float iv[24] = {
+                        ox,       oy,       0,0,
+                        ox+inner, oy,       1,0,
+                        ox+inner, oy+inner, 1,1,
+                        ox,       oy,       0,0,
+                        ox+inner, oy+inner, 1,1,
+                        ox,       oy+inner, 0,1,
+                    };
+                    glBindTexture(GL_TEXTURE_2D, item_textures[drag_item]);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(iv), iv);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                }
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
                 glDisable(GL_BLEND); glEnable(GL_CULL_FACE); glEnable(GL_DEPTH_TEST);
             }
 
@@ -1201,11 +1426,13 @@ int main(void) {
     settings.render_distance_chunks = render_distance_chunks;
     settings.gravity_enabled = gravity_enabled;
     save_settings("Savefiles/settings.cfg", &settings);
+    inventory_put_back(inventory, &drag_item, &drag_from);
+    save_inventory("Savefiles/inventory.bin", inventory);
 
     world_save_all_dirty(world);
     world_free(world);
     glDeleteTextures(1,&texture); glDeleteTextures(1,&buttonTexture); glDeleteTextures(1,&crosshairTexture);
-    for (int i = 0; i < 9; i++) if (hotbar_textures[i]) glDeleteTextures(1, &hotbar_textures[i]);
+    for (int i = 0; i < ITEM_COUNT; i++) if (item_textures[i]) glDeleteTextures(1, &item_textures[i]);
     glDeleteProgram(shaderProgram); glDeleteProgram(uiProgram); glDeleteProgram(buttonProgram); glDeleteProgram(selectionProgram);
     glDeleteBuffers(1,&uiVBO); glDeleteVertexArrays(1,&uiVAO);
     glDeleteBuffers(1,&buttonVBO); glDeleteVertexArrays(1,&buttonVAO);
