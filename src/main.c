@@ -301,6 +301,7 @@ typedef struct {
     int fps_cap;
     float render_distance_chunks;
     int gravity_enabled;
+    int soft_lighting;
 } Settings;
 
 static void load_settings(const char* path, Settings* settings) {
@@ -309,10 +310,13 @@ static void load_settings(const char* path, Settings* settings) {
     int fps_cap = settings->fps_cap;
     float render_distance_chunks = settings->render_distance_chunks;
     int gravity_enabled = settings->gravity_enabled;
+    int soft_lighting = settings->soft_lighting;
     if (fscanf(f, "%d %f %d", &fps_cap, &render_distance_chunks, &gravity_enabled) == 3) {
         settings->fps_cap = fps_cap;
         settings->render_distance_chunks = render_distance_chunks;
         settings->gravity_enabled = gravity_enabled ? 1 : 0;
+        if (fscanf(f, "%d", &soft_lighting) == 1)
+            settings->soft_lighting = soft_lighting ? 1 : 0;
     }
     fclose(f);
 }
@@ -320,7 +324,7 @@ static void load_settings(const char* path, Settings* settings) {
 static void save_settings(const char* path, const Settings* settings) {
     FILE* f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "%d %.3f %d\n", settings->fps_cap, settings->render_distance_chunks, settings->gravity_enabled ? 1 : 0);
+    fprintf(f, "%d %.3f %d %d\n", settings->fps_cap, settings->render_distance_chunks, settings->gravity_enabled ? 1 : 0, settings->soft_lighting ? 1 : 0);
     fclose(f);
 }
 
@@ -651,15 +655,18 @@ int main(void) {
     float render_distance_chunks = 6.0f;
     float reach_distance = 7.5f;
     int paused_drag_slider = 0;
+    int soft_lighting = 1;
     Uint32 last_time = SDL_GetTicks();
     Uint64 fps_perf_freq = SDL_GetPerformanceFrequency();
     Uint64 fps_frame_start_counter = SDL_GetPerformanceCounter();
     double fps_next_deadline_seconds = (double)fps_frame_start_counter / (double)fps_perf_freq;
-    Settings settings = { fps_cap, render_distance_chunks, gravity_enabled };
+    Settings settings = { fps_cap, render_distance_chunks, gravity_enabled, soft_lighting };
     load_settings("Savefiles/settings.cfg", &settings);
     fps_cap = settings.fps_cap;
     render_distance_chunks = settings.render_distance_chunks;
     gravity_enabled = settings.gravity_enabled;
+    soft_lighting = settings.soft_lighting;
+    chunk_mesh_set_soft_lighting(soft_lighting);
 
     while (running) {
         int break_requested=0, place_requested=0;
@@ -707,6 +714,7 @@ int main(void) {
                 float slider_y2=slider_y1+row_gap;
                 float button_y1=slider_y2+row_gap;
                 float button_y2=button_y1+row_gap;
+                float button_y3=button_y2+row_gap;
                 float mouse_x=0.0f, mouse_y=0.0f;
                 ui_window_to_drawable(window, event.button.x, event.button.y, &mouse_x, &mouse_y);
                 if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, slider_y1, menu_w, row_h)) {
@@ -717,6 +725,11 @@ int main(void) {
                     paused=0; SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click=1;
                 } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, button_y2, menu_w, row_h)) {
                     gravity_enabled=!gravity_enabled; if(!gravity_enabled) vel_y=0.0f;
+                } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, button_y3, menu_w, row_h)) {
+                    soft_lighting = !soft_lighting;
+                    chunk_mesh_set_soft_lighting(soft_lighting);
+                    for (int i = 0; i < WORLD_SLOTS; i++)
+                        if (world->slots[i].loaded) world->slots[i].mesh_dirty = 1;
                 }
                 if (paused_drag_slider == 1 || paused_drag_slider == 2) {
                     float t = clampf_local((mouse_x - menu_x) / menu_w, 0.0f, 1.0f);
@@ -1329,8 +1342,8 @@ int main(void) {
             glUniform2f(u_btn_screenSize,(float)screen_w,(float)screen_h);
             glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D,buttonTexture);
             glUniform1i(u_btn_tex,1);
-            float boffsets[]={0,84};
-            for(int b=0;b<2;b++){
+            float boffsets[]={0,84,168};
+            for(int b=0;b<3;b++){
                 float by2=button_y1+boffsets[b];
                 float bv[24]={panel_x,by2,0,0, panel_x+panel_w,by2,1,0, panel_x+panel_w,by2+row_h,1,1, panel_x,by2,0,0, panel_x+panel_w,by2+row_h,1,1, panel_x,by2+row_h,0,1};
                 glBufferSubData(GL_ARRAY_BUFFER,0,sizeof(bv),bv);
@@ -1390,9 +1403,11 @@ int main(void) {
             glUseProgram(uiProgram); glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER,uiVBO);
             float tverts[32768]; int tc=0; float ts=2.2f;
             const char* lbls[]={ "continue playing",
-                                  gravity_enabled?"gravity on":"gravity off" };
-            float ypos[]={button_y1,button_y2};
-            for(int b=0;b<2;b++){
+                                  gravity_enabled?"gravity on":"gravity off",
+                                  soft_lighting?"lighting: soft":"lighting: hard" };
+            float button_y3=button_y2+row_gap;
+            float ypos[]={button_y1,button_y2,button_y3};
+            for(int b=0;b<3;b++){
                 tc=0; float tw=0;
                 for(const char* ch=lbls[b];*ch;++ch) tw+=(*ch==' ')?4.0f*ts:6.0f*ts;
                 build_text_vertices(lbls[b],panel_x+(panel_w-tw)*0.5f,ypos[b]+(row_h-7*ts)*0.5f,ts,tverts,&tc);
@@ -1436,6 +1451,7 @@ int main(void) {
     settings.fps_cap = fps_cap;
     settings.render_distance_chunks = render_distance_chunks;
     settings.gravity_enabled = gravity_enabled;
+    settings.soft_lighting = soft_lighting;
     save_settings("Savefiles/settings.cfg", &settings);
     inventory_put_back(inventory, &drag_item, &drag_from);
     save_inventory("Savefiles/inventory.bin", inventory);

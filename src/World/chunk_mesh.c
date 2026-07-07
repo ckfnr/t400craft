@@ -184,9 +184,8 @@ static void build_lightmap_from_cache(Chunk* chunk, Chunk* neighbors[4],
 }
 
 static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
-                     float x, float y, float z, int face, BlockType type, float light, float shadow, const float* ch) {
+                     float x, float y, float z, int face, BlockType type, const float* cb, const float* ch) {
     static const float face_dim[] = {1.0f, 0.6f, 0.8f, 0.8f, 0.7f, 0.7f};
-    float b = light * face_dim[face] * shadow;
     float layer = (float)block_face_texture_layer(type, face);
     float positions[4][3];
     switch (face) {
@@ -243,6 +242,7 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
     }
     int base = *vc;
     for (int i = 0; i < 4; i++) {
+        float b = cb[i] * face_dim[face];
         verts[(*vc)*9+0] = positions[i][0];
         verts[(*vc)*9+1] = positions[i][1];
         verts[(*vc)*9+2] = positions[i][2];
@@ -273,31 +273,55 @@ static int mesh_cell_opaque(Chunk* chunk, Chunk* neighbors[4], int nx, int ny, i
     return b && block_opaque(b->type) && b->type != BLOCK_GLASS;
 }
 
-static float face_shadow_factor(Chunk* chunk, Chunk* neighbors[4], int x, int y, int z, int face) {
-    if (face == 0) return 1.0f;
-    static const int face_axes[6][6] = {
-        {1, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 0, 1},
-        {1, 0, 0, 0, 1, 0},
-        {1, 0, 0, 0, 1, 0},
-        {0, 1, 0, 0, 0, 1},
-        {0, 1, 0, 0, 0, 1},
-    };
-    static const int corner_signs[4][2] = {
-        {-1, -1},
-        { 1, -1},
-        { 1,  1},
-        {-1,  1},
-    };
+static int soft_lighting_enabled = 1;
 
+void chunk_mesh_set_soft_lighting(int enabled) {
+    soft_lighting_enabled = enabled ? 1 : 0;
+}
+
+static const int face_axes[6][6] = {
+    {1, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 1, 0},
+    {1, 0, 0, 0, 1, 0},
+    {0, 1, 0, 0, 0, 1},
+    {0, 1, 0, 0, 0, 1},
+};
+
+static const int vert_corner_signs[6][4][2] = {
+    {{-1, 1}, { 1, 1}, { 1,-1}, {-1,-1}},
+    {{-1,-1}, { 1,-1}, { 1, 1}, {-1, 1}},
+    {{-1,-1}, { 1,-1}, { 1, 1}, {-1, 1}},
+    {{ 1,-1}, {-1,-1}, {-1, 1}, { 1, 1}},
+    {{-1,-1}, {-1, 1}, { 1, 1}, { 1,-1}},
+    {{-1, 1}, {-1,-1}, { 1,-1}, { 1, 1}},
+};
+
+static const float light_table[16] = {
+    0.07f, 0.09f, 0.12f, 0.15f, 0.19f, 0.24f, 0.30f, 0.37f,
+    0.45f, 0.54f, 0.63f, 0.72f, 0.81f, 0.89f, 0.95f, 1.00f
+};
+
+static int ext_light_at(int x, int y, int z) {
+    if (y >= CHUNK_SIZE_Y) return MAX_LIGHT;
+    if (y < 0) return -1;
+    if (x < -1 || x > CHUNK_SIZE_X || z < -1 || z > CHUNK_SIZE_Z) return -1;
+    if (ext_solid[x+1][y][z+1]) return -1;
+    return ext_light[x+1][y][z+1];
+}
+
+static void face_shadow_corners(Chunk* chunk, Chunk* neighbors[4], int x, int y, int z, int face, float out[4]) {
+    if (face == 0) {
+        out[0] = out[1] = out[2] = out[3] = 1.0f;
+        return;
+    }
     const int* axis = face_axes[face];
     int ux = axis[0], uy = axis[1], uz = axis[2];
     int vx = axis[3], vy = axis[4], vz = axis[5];
-    float total = 0.0f;
 
     for (int i = 0; i < 4; i++) {
-        int su = corner_signs[i][0];
-        int sv = corner_signs[i][1];
+        int su = vert_corner_signs[face][i][0];
+        int sv = vert_corner_signs[face][i][1];
         int side_u = mesh_cell_opaque(chunk, neighbors, x + su * ux, y + su * uy, z + su * uz);
         int side_v = mesh_cell_opaque(chunk, neighbors, x + sv * vx, y + sv * vy, z + sv * vz);
         int corner = mesh_cell_opaque(chunk, neighbors,
@@ -310,10 +334,8 @@ static float face_shadow_factor(Chunk* chunk, Chunk* neighbors[4], int x, int y,
         shade -= 0.10f * (float)corner;
         if (side_u && side_v) shade -= 0.10f;
         if (shade < 0.42f) shade = 0.42f;
-        total += shade;
+        out[i] = shade;
     }
-
-    return total * 0.25f;
 }
 
 static float canopy_shadow_factor(Chunk* chunk, Chunk* neighbors[4], int x, int y, int z) {
@@ -372,10 +394,6 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
     static const int dx[] = {0, 0, 0, 0, -1, 1};
     static const int dy[] = {1,-1, 0, 0,  0, 0};
     static const int dz[] = {0, 0, 1,-1,  0, 0};
-    static const float light_table[16] = {
-        0.07f, 0.09f, 0.12f, 0.15f, 0.19f, 0.24f, 0.30f, 0.37f,
-        0.45f, 0.54f, 0.63f, 0.72f, 0.81f, 0.89f, 0.95f, 1.00f
-    };
 
     static GLfloat verts[MAX_VERTICES * 9];
     static GLuint  inds[MAX_INDICES];
@@ -440,17 +458,42 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
                     } else {
                         lv = light_table[ext_light[nx+1][ny][EXT_Z-1]];
                     }
-                    float shadow = face_shadow_factor(chunk, neighbors, x, y, z, face);
+                    float shades[4];
+                    face_shadow_corners(chunk, neighbors, x, y, z, face, shades);
+                    float canopy = 1.0f;
                     if (face == 0)
-                        shadow *= canopy_shadow_factor(chunk, neighbors, x, y, z);
+                        canopy = canopy_shadow_factor(chunk, neighbors, x, y, z);
+                    float corner_b[4];
+                    if (soft_lighting_enabled && dynamic) {
+                        const int* axis = face_axes[face];
+                        for (int i = 0; i < 4; i++) {
+                            int su = vert_corner_signs[face][i][0];
+                            int sv = vert_corner_signs[face][i][1];
+                            int sum = 0, cnt = 0;
+                            for (int c = 0; c < 4; c++) {
+                                int cu = (c & 1) ? su : 0;
+                                int cv = (c & 2) ? sv : 0;
+                                int v = ext_light_at(nx + cu * axis[0] + cv * axis[3],
+                                                     ny + cu * axis[1] + cv * axis[4],
+                                                     nz + cu * axis[2] + cv * axis[5]);
+                                if (v >= 0) { sum += v; cnt++; }
+                            }
+                            float cl = cnt ? light_table[(sum + cnt / 2) / cnt] : lv;
+                            corner_b[i] = cl * shades[i] * canopy;
+                        }
+                    } else {
+                        float shadow = (shades[0] + shades[1] + shades[2] + shades[3]) * 0.25f;
+                        for (int i = 0; i < 4; i++)
+                            corner_b[i] = lv * shadow * canopy;
+                    }
                     if (is_water)
                         add_face(wverts, winds, &wvc, &wic,
                                  (float)x, (float)y, (float)z,
-                                 face, type, lv, shadow, wch);
+                                 face, type, corner_b, wch);
                     else
                         add_face(verts, inds, &vc, &ic,
                                  (float)x, (float)y, (float)z,
-                                 face, type, lv, shadow, NULL);
+                                 face, type, corner_b, NULL);
                 }
             }
         }
