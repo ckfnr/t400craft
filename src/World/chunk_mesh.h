@@ -12,5 +12,7 @@ void chunk_build_mesh_with_cached_neighbors(Chunk* chunk, Chunk* neighbors[4],
     Mesh* out_solid, Mesh* out_water);
 void chunk_compute_lightmap(Chunk* chunk, uint8_t out[16][128][16]);
 void chunk_mesh_set_soft_lighting(int enabled);
+void chunk_mesh_set_directional_lighting(int enabled);
+void chunk_mesh_set_shadow_dir(float step_x, float step_z);
 
 #endif

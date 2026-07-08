@@ -1,6 +1,7 @@
 #include "chunk_mesh.h"
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #define MAX_VERTICES (CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z * 6 * 4)
 #define MAX_INDICES  (CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z * 6 * 6)
@@ -183,9 +184,23 @@ static void build_lightmap_from_cache(Chunk* chunk, Chunk* neighbors[4],
                 light[x][y][z] = ext_light[x+1][y][z+1];
 }
 
+static int directional_lighting_enabled = 0;
+static float shadow_step_x = 0.0f;
+static float shadow_step_z = 0.0f;
+
+void chunk_mesh_set_directional_lighting(int enabled) {
+    directional_lighting_enabled = enabled ? 1 : 0;
+}
+
+void chunk_mesh_set_shadow_dir(float step_x, float step_z) {
+    shadow_step_x = step_x;
+    shadow_step_z = step_z;
+}
+
 static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
                      float x, float y, float z, int face, BlockType type, const float* cb, const float* ch) {
     static const float face_dim[] = {1.0f, 0.6f, 0.8f, 0.8f, 0.7f, 0.7f};
+    float dim = directional_lighting_enabled ? 1.0f : face_dim[face];
     float layer = (float)block_face_texture_layer(type, face);
     float positions[4][3];
     switch (face) {
@@ -242,7 +257,7 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
     }
     int base = *vc;
     for (int i = 0; i < 4; i++) {
-        float b = cb[i] * face_dim[face];
+        float b = cb[i] * dim;
         verts[(*vc)*9+0] = positions[i][0];
         verts[(*vc)*9+1] = positions[i][1];
         verts[(*vc)*9+2] = positions[i][2];
@@ -262,10 +277,10 @@ static Block* mesh_cell(Chunk* chunk, Chunk* neighbors[4], int nx, int ny, int n
     int zin = (nz >= 0 && nz < CHUNK_SIZE_Z);
     if (xin && zin) return &chunk->blocks[nx][ny][nz];
     if (!neighbors || (!xin && !zin)) return NULL;
-    if (nx < 0)             return neighbors[0] ? &neighbors[0]->blocks[CHUNK_SIZE_X-1][ny][nz] : NULL;
-    if (nx >= CHUNK_SIZE_X) return neighbors[1] ? &neighbors[1]->blocks[0][ny][nz] : NULL;
-    if (nz < 0)             return neighbors[2] ? &neighbors[2]->blocks[nx][ny][CHUNK_SIZE_Z-1] : NULL;
-    return                         neighbors[3] ? &neighbors[3]->blocks[nx][ny][0] : NULL;
+    if (nx < 0)             return (neighbors[0] && nx >= -CHUNK_SIZE_X)     ? &neighbors[0]->blocks[nx + CHUNK_SIZE_X][ny][nz] : NULL;
+    if (nx >= CHUNK_SIZE_X) return (neighbors[1] && nx < 2 * CHUNK_SIZE_X)   ? &neighbors[1]->blocks[nx - CHUNK_SIZE_X][ny][nz] : NULL;
+    if (nz < 0)             return (neighbors[2] && nz >= -CHUNK_SIZE_Z)     ? &neighbors[2]->blocks[nx][ny][nz + CHUNK_SIZE_Z] : NULL;
+    return                         (neighbors[3] && nz < 2 * CHUNK_SIZE_Z)   ? &neighbors[3]->blocks[nx][ny][nz - CHUNK_SIZE_Z] : NULL;
 }
 
 static int mesh_cell_opaque(Chunk* chunk, Chunk* neighbors[4], int nx, int ny, int nz) {
@@ -341,10 +356,15 @@ static void face_shadow_corners(Chunk* chunk, Chunk* neighbors[4], int x, int y,
 static float canopy_shadow_factor(Chunk* chunk, Chunk* neighbors[4], int x, int y, int z) {
     float occlusion = 0.0f;
     for (int dy = 1; dy <= 8 && y + dy < CHUNK_SIZE_Y; dy++) {
+        int ox = 0, oz = 0;
+        if (directional_lighting_enabled) {
+            ox = (int)floorf(shadow_step_x * (float)dy + 0.5f);
+            oz = (int)floorf(shadow_step_z * (float)dy + 0.5f);
+        }
         float height_weight = 1.0f / (float)dy;
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
-                Block* b = mesh_cell(chunk, neighbors, x + dx, y + dy, z + dz);
+                Block* b = mesh_cell(chunk, neighbors, x + ox + dx, y + dy, z + oz + dz);
                 if (!b || !block_opaque(b->type)) continue;
                 float footprint = b->type == BLOCK_GLASS ? 0.1f : 1.0f;
                 if (dx != 0) footprint *= 0.65f;

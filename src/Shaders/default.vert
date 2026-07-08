@@ -8,11 +8,14 @@ varying vec3 color;
 varying vec2 texCoord;
 varying float texLayer;
 varying float fog_depth;
+varying vec3 world_pos;
 uniform mat4 camMatrix;
 uniform mat4 model;
 void main()
 {
-    gl_Position = camMatrix * model * vec4(aPos, 1.0);
+    vec4 wp = model * vec4(aPos, 1.0);
+    world_pos = wp.xyz;
+    gl_Position = camMatrix * wp;
     fog_depth   = gl_Position.w;
     color       = aColor;
     texCoord    = aTexCoord;
