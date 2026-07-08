@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+//blocks are defined here
 typedef enum {
     BLOCK_AIR = 0,
     BLOCK_DIRT,
@@ -18,6 +19,8 @@ typedef enum {
     BLOCK_STONE_BRICKS,
     BLOCK_SMOOTH_STONE,
     BLOCK_OBSIDIAN,
+    BLOCK_SAND,
+    BLOCK_GRAVEL,
 } BlockType;
 
 #define WATER_LEVEL_SOURCE  8

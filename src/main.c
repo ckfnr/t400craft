@@ -154,7 +154,8 @@ typedef struct {
     int is_bucket;
 } ItemDef;
 
-#define ITEM_COUNT 13
+//defining the items
+#define ITEM_COUNT 15
 static const ItemDef item_defs[ITEM_COUNT] = {
     {NULL,                            BLOCK_AIR,         0},
     {"src/textures/cobblestone.png",  BLOCK_COBBLESTONE, 0},
@@ -168,7 +169,9 @@ static const ItemDef item_defs[ITEM_COUNT] = {
     {"src/textures/stone.png",      BLOCK_NATURAL_STONE, 0},
     {"src/textures/stone_bricks.png", BLOCK_STONE_BRICKS, 0},
     {"src/textures/smooth_stone.png", BLOCK_SMOOTH_STONE, 0},
+    {"src/textures/sand.png",         BLOCK_SAND,        0},
     {"src/textures/obsidian.png", BLOCK_OBSIDIAN, 0},
+    {"src/textures/gravel.png", BLOCK_GRAVEL, 0},
 };
 
 #define INV_SIZE 36
@@ -624,6 +627,7 @@ int main(void) {
     if (!world) { SDL_Quit(); return 1; }
     world_init(world, 0, 0, "Savefiles");
 
+    //Location of textures for blocks
     const char* world_textures[] = {
         "src/textures/dirtblock.png",
         "src/textures/grass_side.png",
@@ -638,9 +642,11 @@ int main(void) {
         "src/textures/stone.png",
         "src/textures/stone_bricks.png",
         "src/textures/smooth_stone.png",
-        "src/textures/obsidian.png"
+        "src/textures/obsidian.png",
+        "src/textures/sand.png",
+        "src/textures/gravel.png",
     };
-    GLuint texture = load_texture_array(world_textures, 14);
+    GLuint texture = load_texture_array(world_textures, 16);
 
     int buttonW, buttonH, buttonCh;
     unsigned char* buttonBytes = stbi_load("src/UI/button.png", &buttonW, &buttonH, &buttonCh, 4);
