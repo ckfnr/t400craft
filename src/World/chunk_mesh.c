@@ -7,6 +7,8 @@
 #define MAX_INDICES  (CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z * 6 * 6)
 #define MAX_LIGHT 15
 
+
+// returns the texture layer index for a given block type and face
 static int block_face_texture_layer(BlockType type, int face) {
     switch (type) {
         case BLOCK_DIRT:        return 0;

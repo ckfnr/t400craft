@@ -627,7 +627,7 @@ int main(void) {
     if (!world) { SDL_Quit(); return 1; }
     world_init(world, 0, 0, "Savefiles");
 
-    //Location of textures for blocks
+    //location of textures for blocks
     const char* world_textures[] = {
         "src/textures/dirtblock.png",
         "src/textures/grass_side.png",
