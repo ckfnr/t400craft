@@ -1564,7 +1564,7 @@ int main(void) {
             glUseProgram(uiProgram); glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER,uiVBO);
             float tverts[32768]; int tc=0; float ts=2.2f;
             const char* lbls[]={ "continue playing",
-                                  gravity_enabled?"gravity on":"gravity off",
+                                  gravity_enabled?"gravity: on":"gravity: off",
                                   soft_lighting?"lighting: soft":"lighting: hard",
                                   day_night_cycle?"day-night-cycle: on":"day-night-cycle: off" };
             float ypos[]={continue_y,button_y1,button_y2,button_y3};
