@@ -760,13 +760,13 @@ int main(void) {
     float place_timer=0.0f;
     int show_fps=0, fps_count=0, fps_display=0;
     float fps_timer=0.0f;
-    int fps_cap = 120;
-    float render_distance_chunks = 6.0f;
-    float reach_distance = 7.5f;
+    int fps_cap = 120;                          //standard setting at start
+    float render_distance_chunks = 6.0f;        //standard setting at start
+    float reach_distance = 7.5f;                //standard setting at start
     int paused_drag_slider = 0;
-    int soft_lighting = 1;
-    int day_night_cycle = 0;
-    const float DAY_LENGTH_SECONDS = 1200.0f;
+    int soft_lighting = 1;                      //standard setting at start
+    int day_night_cycle = 1;                    //standard setting at start
+    const float DAY_LENGTH_SECONDS = 1200.0f;   //length of a day-night-cycle in seconds (20 minutes by default)
     const float DAY_TIME_STATIC = 182.44f;
     float day_time = DAY_LENGTH_SECONDS * 0.25f;
     Uint32 last_time = SDL_GetTicks();
