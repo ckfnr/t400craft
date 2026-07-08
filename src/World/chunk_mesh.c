@@ -23,6 +23,9 @@ static int block_face_texture_layer(BlockType type, int face) {
             return 6;
         case BLOCK_OAK_LEAVES:  return 8;
         case BLOCK_GLASS:       return 9;
+        case BLOCK_NATURAL_STONE: return 10;
+        case BLOCK_STONE_BRICKS: return 11;
+        case BLOCK_SMOOTH_STONE: return 12;
         case BLOCK_AIR:
         default:                return 0;
     }
