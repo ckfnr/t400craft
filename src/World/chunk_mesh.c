@@ -26,6 +26,7 @@ static int block_face_texture_layer(BlockType type, int face) {
         case BLOCK_NATURAL_STONE: return 10;
         case BLOCK_STONE_BRICKS: return 11;
         case BLOCK_SMOOTH_STONE: return 12;
+        case BLOCK_OBSIDIAN:     return 13;
         case BLOCK_AIR:
         default:                return 0;
     }
@@ -328,24 +329,34 @@ static int ext_light_at(int x, int y, int z) {
     return ext_light[x+1][y][z+1];
 }
 
+static const int face_normals[6][3] = {
+    { 0, 1, 0}, { 0,-1, 0}, { 0, 0, 1}, { 0, 0,-1}, {-1, 0, 0}, { 1, 0, 0},
+};
+
 static void face_shadow_corners(Chunk* chunk, Chunk* neighbors[4], int x, int y, int z, int face, float out[4]) {
-    if (face == 0) {
+    if (face == 0 && !directional_lighting_enabled) {
         out[0] = out[1] = out[2] = out[3] = 1.0f;
         return;
     }
     const int* axis = face_axes[face];
     int ux = axis[0], uy = axis[1], uz = axis[2];
     int vx = axis[3], vy = axis[4], vz = axis[5];
+    int bx = x, by = y, bz = z;
+    if (directional_lighting_enabled) {
+        bx += face_normals[face][0];
+        by += face_normals[face][1];
+        bz += face_normals[face][2];
+    }
 
     for (int i = 0; i < 4; i++) {
         int su = vert_corner_signs[face][i][0];
         int sv = vert_corner_signs[face][i][1];
-        int side_u = mesh_cell_opaque(chunk, neighbors, x + su * ux, y + su * uy, z + su * uz);
-        int side_v = mesh_cell_opaque(chunk, neighbors, x + sv * vx, y + sv * vy, z + sv * vz);
+        int side_u = mesh_cell_opaque(chunk, neighbors, bx + su * ux, by + su * uy, bz + su * uz);
+        int side_v = mesh_cell_opaque(chunk, neighbors, bx + sv * vx, by + sv * vy, bz + sv * vz);
         int corner = mesh_cell_opaque(chunk, neighbors,
-            x + su * ux + sv * vx,
-            y + su * uy + sv * vy,
-            z + su * uz + sv * vz);
+            bx + su * ux + sv * vx,
+            by + su * uy + sv * vy,
+            bz + su * uz + sv * vz);
 
         float shade = 1.0f;
         shade -= 0.16f * (float)(side_u + side_v);
@@ -502,12 +513,18 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
                                 if (v >= 0) { sum += v; cnt++; }
                             }
                             float cl = cnt ? light_table[(sum + cnt / 2) / cnt] : lv;
-                            corner_b[i] = cl * shades[i] * canopy;
+                            float ceff = canopy;
+                            if (directional_lighting_enabled)
+                                ceff = 1.0f - (1.0f - canopy) * cl;
+                            corner_b[i] = cl * shades[i] * ceff;
                         }
                     } else {
                         float shadow = (shades[0] + shades[1] + shades[2] + shades[3]) * 0.25f;
+                        float ceff = canopy;
+                        if (directional_lighting_enabled)
+                            ceff = 1.0f - (1.0f - canopy) * lv;
                         for (int i = 0; i < 4; i++)
-                            corner_b[i] = lv * shadow * canopy;
+                            corner_b[i] = lv * shadow * ceff;
                     }
                     if (is_water)
                         add_face(wverts, winds, &wvc, &wic,

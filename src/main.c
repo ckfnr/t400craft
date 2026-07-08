@@ -154,7 +154,7 @@ typedef struct {
     int is_bucket;
 } ItemDef;
 
-#define ITEM_COUNT 12
+#define ITEM_COUNT 13
 static const ItemDef item_defs[ITEM_COUNT] = {
     {NULL,                            BLOCK_AIR,         0},
     {"src/textures/cobblestone.png",  BLOCK_COBBLESTONE, 0},
@@ -168,6 +168,7 @@ static const ItemDef item_defs[ITEM_COUNT] = {
     {"src/textures/stone.png",      BLOCK_NATURAL_STONE, 0},
     {"src/textures/stone_bricks.png", BLOCK_STONE_BRICKS, 0},
     {"src/textures/smooth_stone.png", BLOCK_SMOOTH_STONE, 0},
+    {"src/textures/obsidian.png", BLOCK_OBSIDIAN, 0},
 };
 
 #define INV_SIZE 36
@@ -637,8 +638,9 @@ int main(void) {
         "src/textures/stone.png",
         "src/textures/stone_bricks.png",
         "src/textures/smooth_stone.png",
+        "src/textures/obsidian.png"
     };
-    GLuint texture = load_texture_array(world_textures, 13);
+    GLuint texture = load_texture_array(world_textures, 14);
 
     int buttonW, buttonH, buttonCh;
     unsigned char* buttonBytes = stbi_load("src/UI/button.png", &buttonW, &buttonH, &buttonCh, 4);
@@ -747,6 +749,7 @@ int main(void) {
     int soft_lighting = 1;
     int day_night_cycle = 0;
     const float DAY_LENGTH_SECONDS = 1200.0f;
+    const float DAY_TIME_STATIC = 182.44f;
     float day_time = DAY_LENGTH_SECONDS * 0.25f;
     Uint32 last_time = SDL_GetTicks();
     Uint64 fps_perf_freq = SDL_GetPerformanceFrequency();
@@ -762,13 +765,14 @@ int main(void) {
     day_time = settings.day_time;
     if (!(day_time >= 0.0f && day_time < DAY_LENGTH_SECONDS)) day_time = DAY_LENGTH_SECONDS * 0.25f;
     chunk_mesh_set_soft_lighting(soft_lighting);
-    chunk_mesh_set_directional_lighting(day_night_cycle);
+    chunk_mesh_set_directional_lighting(1);
     int last_shadow_bucket;
     {
+        float et = day_night_cycle ? day_time : DAY_TIME_STATIC;
         float ssx, ssz;
-        day_cycle_shadow_steps(day_time, DAY_LENGTH_SECONDS, &ssx, &ssz);
+        day_cycle_shadow_steps(et, DAY_LENGTH_SECONDS, &ssx, &ssz);
         chunk_mesh_set_shadow_dir(ssx, ssz);
-        last_shadow_bucket = (int)(day_time / DAY_LENGTH_SECONDS * 40.0f);
+        last_shadow_bucket = (int)(et / DAY_LENGTH_SECONDS * 40.0f);
     }
 
     while (running) {
@@ -836,9 +840,6 @@ int main(void) {
                         if (world->slots[i].loaded) world->slots[i].mesh_dirty = 1;
                 } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, button_y3, menu_w, row_h)) {
                     day_night_cycle = !day_night_cycle;
-                    chunk_mesh_set_directional_lighting(day_night_cycle);
-                    for (int i = 0; i < WORLD_SLOTS; i++)
-                        if (world->slots[i].loaded) world->slots[i].mesh_dirty = 1;
                 }
                 if (paused_drag_slider == 1 || paused_drag_slider == 2) {
                     float t = clampf_local((mouse_x - menu_x) / menu_w, 0.0f, 1.0f);
@@ -925,38 +926,37 @@ int main(void) {
             day_time += dt;
             if (day_time >= DAY_LENGTH_SECONDS) day_time -= DAY_LENGTH_SECONDS;
         }
-        float sky_r = FOG_R, sky_g = FOG_G, sky_b = FOG_B;
-        float sun_dir_x = 0.0f, sun_dir_y = 1.0f, sun_dir_z = 0.0f;
-        float light_dx = 0.0f, light_dy = 1.0f, light_dz = 0.0f;
-        float light_ambient = 1.0f, light_diffuse = 0.0f;
-        if (day_night_cycle) {
-            day_cycle_sun_dir(day_time, DAY_LENGTH_SECONDS, &sun_dir_x, &sun_dir_y, &sun_dir_z);
-            int shadow_bucket = (int)(day_time / DAY_LENGTH_SECONDS * 40.0f);
-            if (shadow_bucket != last_shadow_bucket) {
-                last_shadow_bucket = shadow_bucket;
-                float ssx, ssz;
-                day_cycle_shadow_steps(day_time, DAY_LENGTH_SECONDS, &ssx, &ssz);
-                chunk_mesh_set_shadow_dir(ssx, ssz);
-                for (int i = 0; i < WORLD_SLOTS; i++)
-                    if (world->slots[i].loaded) world->slots[i].mesh_dirty = 1;
-            }
-            float sun_up = clampf_local(sun_dir_y * 6.0f, 0.0f, 1.0f);
-            float moon_up = clampf_local(-sun_dir_y * 6.0f, 0.0f, 1.0f);
-            light_ambient = 0.16f + 0.29f * sun_up + 0.10f * moon_up;
-            if (sun_up >= moon_up) {
-                light_dx = sun_dir_x; light_dy = sun_dir_y; light_dz = sun_dir_z;
-                light_diffuse = 0.55f * sun_up;
-            } else {
-                light_dx = -sun_dir_x; light_dy = -sun_dir_y; light_dz = -sun_dir_z;
-                light_diffuse = 0.18f * moon_up;
-            }
-            sky_r = 0.015f + (FOG_R - 0.015f) * sun_up;
-            sky_g = 0.025f + (FOG_G - 0.025f) * sun_up;
-            sky_b = 0.070f + (FOG_B - 0.070f) * sun_up;
-            float horizon_glow = clampf_local(1.0f - fabsf(sun_dir_y) * 4.0f, 0.0f, 1.0f);
-            sky_r = fminf(sky_r + horizon_glow * 0.30f, 1.0f);
-            sky_g = fminf(sky_g + horizon_glow * 0.10f, 1.0f);
+        float effective_day_time = day_night_cycle ? day_time : DAY_TIME_STATIC;
+        float sky_r, sky_g, sky_b;
+        float sun_dir_x, sun_dir_y, sun_dir_z;
+        float light_dx, light_dy, light_dz;
+        float light_ambient, light_diffuse;
+        day_cycle_sun_dir(effective_day_time, DAY_LENGTH_SECONDS, &sun_dir_x, &sun_dir_y, &sun_dir_z);
+        int shadow_bucket = (int)(effective_day_time / DAY_LENGTH_SECONDS * 40.0f);
+        if (shadow_bucket != last_shadow_bucket) {
+            last_shadow_bucket = shadow_bucket;
+            float ssx, ssz;
+            day_cycle_shadow_steps(effective_day_time, DAY_LENGTH_SECONDS, &ssx, &ssz);
+            chunk_mesh_set_shadow_dir(ssx, ssz);
+            for (int i = 0; i < WORLD_SLOTS; i++)
+                if (world->slots[i].loaded) world->slots[i].mesh_dirty = 1;
         }
+        float sun_up = clampf_local(sun_dir_y * 6.0f, 0.0f, 1.0f);
+        float moon_up = clampf_local(-sun_dir_y * 6.0f, 0.0f, 1.0f);
+        light_ambient = 0.16f + 0.29f * sun_up + 0.10f * moon_up;
+        if (sun_up >= moon_up) {
+            light_dx = sun_dir_x; light_dy = sun_dir_y; light_dz = sun_dir_z;
+            light_diffuse = 0.55f * sun_up;
+        } else {
+            light_dx = -sun_dir_x; light_dy = -sun_dir_y; light_dz = -sun_dir_z;
+            light_diffuse = 0.18f * moon_up;
+        }
+        sky_r = 0.015f + (FOG_R - 0.015f) * sun_up;
+        sky_g = 0.025f + (FOG_G - 0.025f) * sun_up;
+        sky_b = 0.070f + (FOG_B - 0.070f) * sun_up;
+        float horizon_glow = clampf_local(1.0f - fabsf(sun_dir_y) * 4.0f, 0.0f, 1.0f);
+        sky_r = fminf(sky_r + horizon_glow * 0.30f, 1.0f);
+        sky_g = fminf(sky_g + horizon_glow * 0.10f, 1.0f);
 
         glClearColor(sky_r, sky_g, sky_b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1164,13 +1164,11 @@ int main(void) {
             glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
             glUniform1i(u_tex0, 0);
 
-            if (day_night_cycle) {
-                draw_sky_body(selectionProgram, skyVAO, skyVBO, u_sel_cam, u_sel_model, u_sel_color,
-                              cam.camera_matrix, cam.position, sun_dir_x, sun_dir_y, sun_dir_z, 26.0f, 1.0f, 0.97f, 0.80f);
-                draw_sky_body(selectionProgram, skyVAO, skyVBO, u_sel_cam, u_sel_model, u_sel_color,
-                              cam.camera_matrix, cam.position, -sun_dir_x, -sun_dir_y, -sun_dir_z, 18.0f, 0.72f, 0.76f, 0.85f);
-                glUseProgram(shaderProgram);
-            }
+            draw_sky_body(selectionProgram, skyVAO, skyVBO, u_sel_cam, u_sel_model, u_sel_color,
+                          cam.camera_matrix, cam.position, sun_dir_x, sun_dir_y, sun_dir_z, 26.0f, 1.0f, 0.97f, 0.80f);
+            draw_sky_body(selectionProgram, skyVAO, skyVBO, u_sel_cam, u_sel_model, u_sel_color,
+                          cam.camera_matrix, cam.position, -sun_dir_x, -sun_dir_y, -sun_dir_z, 18.0f, 0.72f, 0.76f, 0.85f);
+            glUseProgram(shaderProgram);
 
             FPlane frustum[6];
             extract_frustum(cam.camera_matrix, frustum);
@@ -1432,13 +1430,11 @@ int main(void) {
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D_ARRAY,texture);
             glUniform1i(u_tex0,0);
 
-            if (day_night_cycle) {
-                draw_sky_body(selectionProgram, skyVAO, skyVBO, u_sel_cam, u_sel_model, u_sel_color,
-                              cam.camera_matrix, cam.position, sun_dir_x, sun_dir_y, sun_dir_z, 26.0f, 1.0f, 0.97f, 0.80f);
-                draw_sky_body(selectionProgram, skyVAO, skyVBO, u_sel_cam, u_sel_model, u_sel_color,
-                              cam.camera_matrix, cam.position, -sun_dir_x, -sun_dir_y, -sun_dir_z, 18.0f, 0.72f, 0.76f, 0.85f);
-                glUseProgram(shaderProgram);
-            }
+            draw_sky_body(selectionProgram, skyVAO, skyVBO, u_sel_cam, u_sel_model, u_sel_color,
+                          cam.camera_matrix, cam.position, sun_dir_x, sun_dir_y, sun_dir_z, 26.0f, 1.0f, 0.97f, 0.80f);
+            draw_sky_body(selectionProgram, skyVAO, skyVBO, u_sel_cam, u_sel_model, u_sel_color,
+                          cam.camera_matrix, cam.position, -sun_dir_x, -sun_dir_y, -sun_dir_z, 18.0f, 0.72f, 0.76f, 0.85f);
+            glUseProgram(shaderProgram);
 
             FPlane frustum[6]; extract_frustum(cam.camera_matrix, frustum);
             for (int i=0;i<WORLD_SLOTS;i++) {

@@ -17,6 +17,7 @@ typedef enum {
     BLOCK_NATURAL_STONE,
     BLOCK_STONE_BRICKS,
     BLOCK_SMOOTH_STONE,
+    BLOCK_OBSIDIAN,
 } BlockType;
 
 #define WATER_LEVEL_SOURCE  8
