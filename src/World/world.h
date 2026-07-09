@@ -13,6 +13,7 @@ typedef struct {
     Chunk  chunk;
     Mesh   mesh;
     Mesh   water_mesh;
+    Mesh   cutout_mesh;
     int    loaded;
     int    mesh_valid;
     int    mesh_dirty;
@@ -31,6 +32,8 @@ typedef struct {
     WaterPos* water_queue;
     int water_count;
     int water_cap;
+    int* water_hash;
+    int water_hash_cap;
     float water_timer;
 } World;
 

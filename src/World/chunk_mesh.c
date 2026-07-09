@@ -428,7 +428,7 @@ static float water_corner_h(Chunk* chunk, Chunk* neighbors[4], int x, int y, int
 
 static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
                         uint8_t light[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z],
-                        int dynamic, Mesh* out_solid, Mesh* out_water) {
+                        int dynamic, Mesh* out_solid, Mesh* out_water, Mesh* out_cutout) {
     static const int dx[] = {0, 0, 0, 0, -1, 1};
     static const int dy[] = {1,-1, 0, 0,  0, 0};
     static const int dz[] = {0, 0, 1,-1,  0, 0};
@@ -437,7 +437,9 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
     static GLuint  inds[MAX_INDICES];
     static GLfloat wverts[MAX_VERTICES * 9];
     static GLuint  winds[MAX_INDICES];
-    int vc = 0, ic = 0, wvc = 0, wic = 0;
+    static GLfloat cverts[MAX_VERTICES * 9];
+    static GLuint  cinds[MAX_INDICES];
+    int vc = 0, ic = 0, wvc = 0, wic = 0, cvc = 0, cic = 0;
 
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
         for (int y = 0; y < CHUNK_SIZE_Y; y++) {
@@ -479,6 +481,7 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
                     } else {
                         if (have_n && block_opaque(ntype) && !block_transparent(ntype)) continue;
                         if (have_n && type == BLOCK_GLASS && ntype == BLOCK_GLASS) continue;
+                        if (have_n && type == BLOCK_OAK_LEAVES && ntype == BLOCK_OAK_LEAVES) continue;
                     }
                     float lv;
                     if (!dynamic) {
@@ -534,6 +537,10 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
                         add_face(wverts, winds, &wvc, &wic,
                                  (float)x, (float)y, (float)z,
                                  face, type, corner_b, wch);
+                    else if (block_transparent(type))
+                        add_face(cverts, cinds, &cvc, &cic,
+                                 (float)x, (float)y, (float)z,
+                                 face, type, corner_b, NULL);
                     else
                         add_face(verts, inds, &vc, &ic,
                                  (float)x, (float)y, (float)z,
@@ -545,10 +552,11 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
 
     *out_solid = mesh_create(verts, vc * 9 * sizeof(GLfloat), inds, ic * sizeof(GLuint));
     *out_water = mesh_create(wverts, wvc * 9 * sizeof(GLfloat), winds, wic * sizeof(GLuint));
+    *out_cutout = mesh_create(cverts, cvc * 9 * sizeof(GLfloat), cinds, cic * sizeof(GLuint));
 }
 
 void chunk_build_mesh_with_neighbors(Chunk* chunk, Chunk* neighbors[4], int dynamic,
-    Mesh* out_solid, Mesh* out_water) {
+    Mesh* out_solid, Mesh* out_water, Mesh* out_cutout) {
     static uint8_t light[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
     static uint8_t tmp[4][CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
     if (dynamic) {
@@ -562,14 +570,14 @@ void chunk_build_mesh_with_neighbors(Chunk* chunk, Chunk* neighbors[4], int dyna
             nb[0] ? (uint8_t*)tmp[0] : NULL, nb[1] ? (uint8_t*)tmp[1] : NULL,
             nb[2] ? (uint8_t*)tmp[2] : NULL, nb[3] ? (uint8_t*)tmp[3] : NULL, light);
     }
-    build_mesh(chunk, neighbors, light, dynamic, out_solid, out_water);
+    build_mesh(chunk, neighbors, light, dynamic, out_solid, out_water, out_cutout);
 }
 
 void chunk_build_mesh_with_cached_neighbors(Chunk* chunk, Chunk* neighbors[4],
     uint8_t* nb0, uint8_t* nb1, uint8_t* nb2, uint8_t* nb3, int dynamic,
-    Mesh* out_solid, Mesh* out_water) {
+    Mesh* out_solid, Mesh* out_water, Mesh* out_cutout) {
     static uint8_t light[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
     if (dynamic)
         build_lightmap_from_cache(chunk, neighbors, nb0, nb1, nb2, nb3, light);
-    build_mesh(chunk, neighbors, light, dynamic, out_solid, out_water);
+    build_mesh(chunk, neighbors, light, dynamic, out_solid, out_water, out_cutout);
 }

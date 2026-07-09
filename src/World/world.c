@@ -103,6 +103,7 @@ static void unload_slot(World* world, int slot_idx) {
     if (s->mesh_valid) {
         mesh_delete(&s->mesh);
         mesh_delete(&s->water_mesh);
+        mesh_delete(&s->cutout_mesh);
         s->mesh_valid = 0;
     }
     s->loaded = 0;
@@ -113,10 +114,7 @@ static void mark_neighbor_meshes_dirty(World* world, int cx, int cz) {
     static const int ndz[5] = {0, 0, 0, -1, 1};
     for (int i = 0; i < 5; i++) {
         WorldSlot* s = world_get_slot(world, cx + ndx[i], cz + ndz[i]);
-        if (s) {
-            s->lightmap_valid = 0;
-            s->mesh_dirty = 1;
-        }
+        if (s) s->mesh_dirty = 1;
     }
 }
 
@@ -155,6 +153,9 @@ void world_free(World* world) {
     world->water_queue = NULL;
     world->water_count = 0;
     world->water_cap = 0;
+    free(world->water_hash);
+    world->water_hash = NULL;
+    world->water_hash_cap = 0;
 }
 
 void world_save_chunk(World* world, int cx, int cz) {
@@ -256,7 +257,7 @@ int world_set_block(World* world, int wx, int wy, int wz, BlockType type) {
     for (int i = 0; i < 5; i++) {
         WorldSlot* s = world_get_slot(world, cx + idx2[i], cz + idz2[i]);
         if (s) {
-            s->lightmap_valid = 0;
+            if (i == 0) s->lightmap_valid = 0;
             s->mesh_dirty = 1;
         }
     }
@@ -291,31 +292,64 @@ void world_rebuild_mesh(World* world, int cx, int cz) {
             }
         }
     }
-    Mesh new_mesh, new_water;
+    Mesh new_mesh, new_water, new_cutout;
     if (world->dynamic_lighting)
         chunk_build_mesh_with_cached_neighbors(&s->chunk, nchunks,
             nb[0] ? (uint8_t*)nb[0]->lightmap : NULL,
             nb[1] ? (uint8_t*)nb[1]->lightmap : NULL,
             nb[2] ? (uint8_t*)nb[2]->lightmap : NULL,
             nb[3] ? (uint8_t*)nb[3]->lightmap : NULL, 1,
-            &new_mesh, &new_water);
+            &new_mesh, &new_water, &new_cutout);
     else
-        chunk_build_mesh_with_neighbors(&s->chunk, nchunks, 0, &new_mesh, &new_water);
+        chunk_build_mesh_with_neighbors(&s->chunk, nchunks, 0, &new_mesh, &new_water, &new_cutout);
     if (s->mesh_valid) {
         mesh_delete(&s->mesh);
         mesh_delete(&s->water_mesh);
+        mesh_delete(&s->cutout_mesh);
     }
     s->mesh = new_mesh;
     s->water_mesh = new_water;
+    s->cutout_mesh = new_cutout;
     s->mesh_valid = 1;
     s->mesh_dirty = 0;
 }
 
+static uint32_t water_pos_hash(int x, int y, int z) {
+    uint32_t h = (uint32_t)x * 73856093u ^ (uint32_t)y * 19349663u ^ (uint32_t)z * 83492791u;
+    h ^= h >> 15;
+    return h;
+}
+
+static void water_hash_insert(World* world, int idx) {
+    uint32_t mask = (uint32_t)world->water_hash_cap - 1;
+    WaterPos* p = &world->water_queue[idx];
+    uint32_t h = water_pos_hash(p->x, p->y, p->z) & mask;
+    while (world->water_hash[h]) h = (h + 1) & mask;
+    world->water_hash[h] = idx + 1;
+}
+
+static int water_hash_grow(World* world) {
+    int nc = world->water_hash_cap ? world->water_hash_cap * 2 : 1024;
+    int* nh = calloc((size_t)nc, sizeof(int));
+    if (!nh) return 0;
+    free(world->water_hash);
+    world->water_hash = nh;
+    world->water_hash_cap = nc;
+    for (int i = 0; i < world->water_count; i++)
+        water_hash_insert(world, i);
+    return 1;
+}
+
 void world_schedule_water(World* world, int wx, int wy, int wz) {
     if (wy < 0 || wy >= CHUNK_SIZE_Y) return;
-    for (int i = 0; i < world->water_count; i++) {
-        WaterPos* p = &world->water_queue[i];
-        if (p->x == wx && p->y == wy && p->z == wz) return;
+    if (world->water_hash_cap) {
+        uint32_t mask = (uint32_t)world->water_hash_cap - 1;
+        uint32_t h = water_pos_hash(wx, wy, wz) & mask;
+        while (world->water_hash[h]) {
+            WaterPos* p = &world->water_queue[world->water_hash[h] - 1];
+            if (p->x == wx && p->y == wy && p->z == wz) return;
+            h = (h + 1) & mask;
+        }
     }
     if (world->water_count >= world->water_cap) {
         int nc = world->water_cap ? world->water_cap * 2 : 256;
@@ -324,7 +358,10 @@ void world_schedule_water(World* world, int wx, int wy, int wz) {
         world->water_queue = nq;
         world->water_cap = nc;
     }
+    if ((world->water_count + 1) * 2 > world->water_hash_cap)
+        if (!water_hash_grow(world)) return;
     world->water_queue[world->water_count++] = (WaterPos){wx, wy, wz};
+    water_hash_insert(world, world->water_count - 1);
 }
 
 static void water_mark_mesh(World* world, int wx, int wz) {
@@ -488,6 +525,8 @@ void world_update_water(World* world, float dt) {
     if (!batch) return;
     memcpy(batch, world->water_queue, sizeof(WaterPos) * count);
     world->water_count = 0;
+    if (world->water_hash_cap)
+        memset(world->water_hash, 0, sizeof(int) * world->water_hash_cap);
     for (int i = 0; i < count; i++)
         water_update_cell(world, batch[i].x, batch[i].y, batch[i].z);
     free(batch);

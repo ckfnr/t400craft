@@ -550,6 +550,32 @@ int main(void) {
     GLint u_light_ambient = glGetUniformLocation(shaderProgram, "light_ambient");
     GLint u_light_diffuse = glGetUniformLocation(shaderProgram, "light_diffuse");
 
+    char* cutVertSrc = load_file("src/Shaders/default.vert");
+    char* cutFragSrc = load_file("src/Shaders/cutout.frag");
+    GLuint cutVertexShader   = compile_shader_source(GL_VERTEX_SHADER,   cutVertSrc);
+    GLuint cutFragmentShader = compile_shader_source(GL_FRAGMENT_SHADER, cutFragSrc);
+    free(cutVertSrc); free(cutFragSrc);
+    GLuint cutoutProgram = glCreateProgram();
+    glAttachShader(cutoutProgram, cutVertexShader);
+    glAttachShader(cutoutProgram, cutFragmentShader);
+    glBindAttribLocation(cutoutProgram, 0, "aPos");
+    glBindAttribLocation(cutoutProgram, 1, "aColor");
+    glBindAttribLocation(cutoutProgram, 2, "aTexCoord");
+    glBindAttribLocation(cutoutProgram, 3, "aTexLayer");
+    glLinkProgram(cutoutProgram);
+    glDeleteShader(cutVertexShader);
+    glDeleteShader(cutFragmentShader);
+
+    GLint u_cut_camMatrix     = glGetUniformLocation(cutoutProgram, "camMatrix");
+    GLint u_cut_model         = glGetUniformLocation(cutoutProgram, "model");
+    GLint u_cut_fog_color     = glGetUniformLocation(cutoutProgram, "fog_color");
+    GLint u_cut_fog_start     = glGetUniformLocation(cutoutProgram, "fog_start");
+    GLint u_cut_fog_end       = glGetUniformLocation(cutoutProgram, "fog_end");
+    GLint u_cut_tex0          = glGetUniformLocation(cutoutProgram, "tex0");
+    GLint u_cut_light_dir     = glGetUniformLocation(cutoutProgram, "light_dir");
+    GLint u_cut_light_ambient = glGetUniformLocation(cutoutProgram, "light_ambient");
+    GLint u_cut_light_diffuse = glGetUniformLocation(cutoutProgram, "light_diffuse");
+
     const char* ui_vert =
         "#version 120\n"
         "attribute vec2 aPos;\n"
@@ -922,14 +948,22 @@ int main(void) {
         world_stream_missing(world, 4);
 
         {
+            Uint64 rb_start = SDL_GetPerformanceCounter();
             int rebuilt = 0;
-            for (int i = 0; i < WORLD_SLOTS && rebuilt < 1; i++) {
-                WorldSlot* s = &world->slots[i];
-                if (s->loaded && (!s->mesh_valid || s->mesh_dirty)) {
-                    world_rebuild_mesh(world, s->chunk.cx, s->chunk.cz);
-                    rebuilt++;
+            for (int ring = 0; ring <= WORLD_RADIUS; ring++) {
+                for (int rdx = -ring; rdx <= ring; rdx++) {
+                    for (int rdz = -ring; rdz <= ring; rdz++) {
+                        if (abs(rdx) != ring && abs(rdz) != ring) continue;
+                        WorldSlot* s = world_get_slot(world, cx_player + rdx, cz_player + rdz);
+                        if (!s || (s->mesh_valid && !s->mesh_dirty)) continue;
+                        world_rebuild_mesh(world, s->chunk.cx, s->chunk.cz);
+                        rebuilt++;
+                        double rb_elapsed = (double)(SDL_GetPerformanceCounter() - rb_start) / (double)fps_perf_freq;
+                        if (rebuilt >= 1 && rb_elapsed >= 0.006) goto rebuild_done;
+                    }
                 }
             }
+            rebuild_done:;
         }
 
         int screen_w=0, screen_h=0;
@@ -956,8 +990,14 @@ int main(void) {
             float ssx, ssz;
             day_cycle_shadow_steps(effective_day_time, DAY_LENGTH_SECONDS, &ssx, &ssz);
             chunk_mesh_set_shadow_dir(ssx, ssz);
-            for (int i = 0; i < WORLD_SLOTS; i++)
-                if (world->slots[i].loaded) world->slots[i].mesh_dirty = 1;
+            for (int i = 0; i < WORLD_SLOTS; i++) {
+                WorldSlot* s = &world->slots[i];
+                if (!s->loaded) continue;
+                float swx = (float)(s->chunk.cx * CHUNK_SIZE_X);
+                float swz = (float)(s->chunk.cz * CHUNK_SIZE_Z);
+                if (!chunk_within_render_distance(cam.position[0], cam.position[2], swx, swz, render_distance_chunks + 2.0f)) continue;
+                s->mesh_dirty = 1;
+            }
         }
         float sun_up = clampf_local(sun_dir_y * 6.0f, 0.0f, 1.0f);
         float moon_up = clampf_local(-sun_dir_y * 6.0f, 0.0f, 1.0f);
@@ -978,6 +1018,10 @@ int main(void) {
 
         glClearColor(sky_r, sky_g, sky_b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glUseProgram(cutoutProgram);
+        glUniform3f(u_cut_light_dir, light_dx, light_dy, light_dz);
+        glUniform1f(u_cut_light_ambient, light_ambient);
+        glUniform1f(u_cut_light_diffuse, light_diffuse);
         glUseProgram(shaderProgram);
         glUniform3f(u_light_dir, light_dx, light_dy, light_dz);
         glUniform1f(u_light_ambient, light_ambient);
@@ -1181,6 +1225,16 @@ int main(void) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
             glUniform1i(u_tex0, 0);
+            glUseProgram(cutoutProgram);
+            glUniformMatrix4fv(u_cut_camMatrix, 1, GL_FALSE, (float*)cam.camera_matrix);
+            if (head_in_water)
+                glUniform3f(u_cut_fog_color, sky_r * 0.78f, sky_g * 0.86f, fminf(sky_b * 1.12f, 1.0f));
+            else
+                glUniform3f(u_cut_fog_color, sky_r, sky_g, sky_b);
+            glUniform1f(u_cut_fog_start, fog_start);
+            glUniform1f(u_cut_fog_end,   fog_end);
+            glUniform1i(u_cut_tex0, 0);
+            glUseProgram(shaderProgram);
 
             draw_sky_body(selectionProgram, skyVAO, skyVBO, u_sel_cam, u_sel_model, u_sel_color,
                           cam.camera_matrix, cam.position, sun_dir_x, sun_dir_y, sun_dir_z, 26.0f, 1.0f, 0.97f, 0.80f);
@@ -1204,6 +1258,23 @@ int main(void) {
                 glUniformMatrix4fv(u_model, 1, GL_FALSE, (float*)chunk_model);
                 mesh_draw(&s->mesh);
             }
+
+            glUseProgram(cutoutProgram);
+            for (int i = 0; i < WORLD_SLOTS; i++) {
+                WorldSlot* s = &world->slots[i];
+                if (!s->loaded || !s->mesh_valid) continue;
+                if (s->cutout_mesh.index_count == 0) continue;
+                float wx = (float)(s->chunk.cx * CHUNK_SIZE_X);
+                float wz = (float)(s->chunk.cz * CHUNK_SIZE_Z);
+                if (!chunk_within_render_distance(cam.position[0], cam.position[2], wx, wz, render_distance_effective_chunks)) continue;
+                if (!chunk_in_frustum(frustum, wx, wz)) continue;
+                mat4 chunk_model; glm_mat4_identity(chunk_model);
+                vec3 chunk_offset = {wx, 0.0f, wz};
+                glm_translate(chunk_model, chunk_offset);
+                glUniformMatrix4fv(u_cut_model, 1, GL_FALSE, (float*)chunk_model);
+                mesh_draw(&s->cutout_mesh);
+            }
+            glUseProgram(shaderProgram);
 
             glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             glDisable(GL_CULL_FACE);
@@ -1447,6 +1518,12 @@ int main(void) {
             glUniform1f(u_fog_start,fog_start); glUniform1f(u_fog_end,fog_end);
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D_ARRAY,texture);
             glUniform1i(u_tex0,0);
+            glUseProgram(cutoutProgram);
+            glUniformMatrix4fv(u_cut_camMatrix,1,GL_FALSE,(float*)cam.camera_matrix);
+            glUniform3f(u_cut_fog_color,sky_r,sky_g,sky_b);
+            glUniform1f(u_cut_fog_start,fog_start); glUniform1f(u_cut_fog_end,fog_end);
+            glUniform1i(u_cut_tex0,0);
+            glUseProgram(shaderProgram);
 
             draw_sky_body(selectionProgram, skyVAO, skyVBO, u_sel_cam, u_sel_model, u_sel_color,
                           cam.camera_matrix, cam.position, sun_dir_x, sun_dir_y, sun_dir_z, 26.0f, 1.0f, 0.97f, 0.80f);
@@ -1466,6 +1543,21 @@ int main(void) {
                 glUniformMatrix4fv(u_model,1,GL_FALSE,(float*)cm);
                 mesh_draw(&s->mesh);
             }
+
+            glUseProgram(cutoutProgram);
+            for (int i=0;i<WORLD_SLOTS;i++) {
+                WorldSlot* s=&world->slots[i];
+                if(!s->loaded||!s->mesh_valid) continue;
+                if (s->cutout_mesh.index_count == 0) continue;
+                float wx=(float)(s->chunk.cx*CHUNK_SIZE_X), wz=(float)(s->chunk.cz*CHUNK_SIZE_Z);
+                if (!chunk_within_render_distance(cam.position[0], cam.position[2], wx, wz, render_distance_effective_chunks)) continue;
+                if(!chunk_in_frustum(frustum,wx,wz)) continue;
+                mat4 cm; glm_mat4_identity(cm);
+                vec3 co={wx,0.0f,wz}; glm_translate(cm,co);
+                glUniformMatrix4fv(u_cut_model,1,GL_FALSE,(float*)cm);
+                mesh_draw(&s->cutout_mesh);
+            }
+            glUseProgram(shaderProgram);
 
             glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             glDisable(GL_CULL_FACE);
@@ -1643,7 +1735,7 @@ int main(void) {
     world_free(world);
     glDeleteTextures(1,&texture); glDeleteTextures(1,&buttonTexture); glDeleteTextures(1,&crosshairTexture);
     for (int i = 0; i < ITEM_COUNT; i++) if (item_textures[i]) glDeleteTextures(1, &item_textures[i]);
-    glDeleteProgram(shaderProgram); glDeleteProgram(uiProgram); glDeleteProgram(buttonProgram); glDeleteProgram(selectionProgram);
+    glDeleteProgram(shaderProgram); glDeleteProgram(cutoutProgram); glDeleteProgram(uiProgram); glDeleteProgram(buttonProgram); glDeleteProgram(selectionProgram);
     glDeleteBuffers(1,&uiVBO); glDeleteVertexArrays(1,&uiVAO);
     glDeleteBuffers(1,&buttonVBO); glDeleteVertexArrays(1,&buttonVAO);
     glDeleteBuffers(1,&selectionEBO); glDeleteBuffers(1,&selectionVBO); glDeleteVertexArrays(1,&selectionVAO);
