@@ -526,20 +526,28 @@ static void ensure_msaa_targets(GLuint* fbo, GLuint* color_rbo, GLuint* depth_rb
         *fbo = 0;
     }
     if (w <= 0 || h <= 0) return;
+    GLint max_samples = 0;
+    glGetIntegerv(GL_MAX_SAMPLES, &max_samples);
+    int samples = max_samples < 4 ? max_samples : 4;
+    if (samples < 2) { *cur_w = 0; *cur_h = 0; return; }
     glGenFramebuffers(1, fbo);
     glGenRenderbuffers(1, color_rbo);
     glGenRenderbuffers(1, depth_rbo);
     glBindRenderbuffer(GL_RENDERBUFFER, *color_rbo);
-    glRenderbufferStorageMultisample(GL_RENDERBUFFER, 4, GL_RGBA8, w, h);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_RGBA8, w, h);
     glBindRenderbuffer(GL_RENDERBUFFER, *depth_rbo);
-    glRenderbufferStorageMultisample(GL_RENDERBUFFER, 4, GL_DEPTH_COMPONENT24, w, h);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH_COMPONENT24, w, h);
     glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, *color_rbo);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, *depth_rbo);
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
-    if (status != GL_FRAMEBUFFER_COMPLETE) {
+    GLint actual_samples = 0;
+    glBindRenderbuffer(GL_RENDERBUFFER, *color_rbo);
+    glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &actual_samples);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE || actual_samples < 2) {
         glDeleteFramebuffers(1, fbo);
         glDeleteRenderbuffers(1, color_rbo);
         glDeleteRenderbuffers(1, depth_rbo);
