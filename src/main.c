@@ -465,8 +465,9 @@ static const GLfloat selection_outline_vertices[] = {
     -0.01f,-0.01f, 1.01f,  1.01f,-0.01f, 1.01f,  1.01f, 1.01f, 1.01f, -0.01f, 1.01f, 1.01f,
 };
 static const GLuint selection_outline_indices[] = {
-    0,1,2, 0,2,3,  4,5,6, 4,6,7,  0,4,7, 0,7,3,
-    1,5,6, 1,6,2,  0,1,5, 0,5,4,  3,2,6, 3,6,7,
+    0,1, 1,2, 2,3, 3,0,
+    4,5, 5,6, 6,7, 7,4,
+    0,4, 1,5, 2,6, 3,7,
 };
 
 static void draw_sky_body(GLuint program, GLuint vao, GLuint vbo, GLint u_cam, GLint u_model, GLint u_color,
@@ -1333,8 +1334,9 @@ int main(void) {
                 glm_translate(sel_model, sel_pos);
                 glUniformMatrix4fv(u_sel_cam,   1, GL_FALSE, (float*)cam.camera_matrix);
                 glUniformMatrix4fv(u_sel_model, 1, GL_FALSE, (float*)sel_model);
-                glUniform4f(u_sel_color, 0.55f, 0.55f, 0.55f, 0.35f);
-                glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
+                glUniform4f(u_sel_color, 1.0f, 1.0f, 1.0f, 0.35f);
+                glLineWidth(1.5f);
+                glDrawElements(GL_LINES, 24, GL_UNSIGNED_INT, 0);
                 glBindVertexArray(0); glEnable(GL_CULL_FACE); glDisable(GL_BLEND);
                 glUseProgram(shaderProgram);
             }
