@@ -22,6 +22,18 @@ typedef struct {
 } WorldSlot;
 
 typedef struct { int x, y, z; } WaterPos;
+typedef struct { int x, y, z; } FallPos;
+
+typedef struct {
+    int ix, iz;
+    int y0;
+    float y;
+    float vel_y;
+    float delay;
+    int started;
+    int target_y;
+    BlockType type;
+} FallingBlock;
 
 typedef struct {
     WorldSlot slots[WORLD_SLOTS];
@@ -35,6 +47,15 @@ typedef struct {
     int* water_hash;
     int water_hash_cap;
     float water_timer;
+    FallPos* fall_queue;
+    int fall_count;
+    int fall_cap;
+    int* fall_hash;
+    int fall_hash_cap;
+    float fall_timer;
+    FallingBlock* falling;
+    int falling_count;
+    int falling_cap;
 } World;
 
 void world_init(World* world, int center_cx, int center_cz, const char* save_dir);
@@ -51,6 +72,9 @@ int        world_set_block(World* world, int wx, int wy, int wz, BlockType type)
 int  world_place_water(World* world, int wx, int wy, int wz);
 void world_schedule_water(World* world, int wx, int wy, int wz);
 void world_update_water(World* world, float dt);
+
+void world_schedule_gravity(World* world, int wx, int wy, int wz);
+void world_update_gravity(World* world, float dt);
 
 void world_rebuild_mesh(World* world, int cx, int cz);
 void world_save_chunk(World* world, int cx, int cz);

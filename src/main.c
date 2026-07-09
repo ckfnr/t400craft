@@ -397,6 +397,17 @@ static int player_collides_at_h(World* world, vec3 position, float ph) {
                         return 1;
                 }
             }
+    for (int i = 0; i < world->falling_count; i++) {
+        FallingBlock* f = &world->falling[i];
+        if (!f->started) continue;
+        float bx0 = (float)f->ix, bx1 = bx0 + 1.0f;
+        float by0 = f->y,         by1 = by0 + 1.0f;
+        float bz0 = (float)f->iz, bz1 = bz0 + 1.0f;
+        if (max_x >= bx0 && min_x <= bx1 &&
+            max_y >= by0 && min_y <= by1 &&
+            max_z >= bz0 && min_z <= bz1)
+            return 1;
+    }
     return 0;
 }
 
@@ -665,6 +676,9 @@ int main(void) {
     World* world = malloc(sizeof(World));
     if (!world) { SDL_Quit(); return 1; }
     world_init(world, 0, 0, "Savefiles");
+
+    Mesh sand_cube_mesh = chunk_mesh_build_block(BLOCK_SAND);
+    Mesh gravel_cube_mesh = chunk_mesh_build_block(BLOCK_GRAVEL);
 
     //location of textures for blocks
     const char* world_textures[] = {
@@ -1038,6 +1052,7 @@ int main(void) {
         mat4 model; glm_mat4_identity(model);
 
         if (!paused) world_update_water(world, dt);
+        if (!paused) world_update_gravity(world, dt);
 
         fps_count++;
         fps_timer += dt;
@@ -1260,6 +1275,16 @@ int main(void) {
                 glm_translate(chunk_model, chunk_offset);
                 glUniformMatrix4fv(u_model, 1, GL_FALSE, (float*)chunk_model);
                 mesh_draw(&s->mesh);
+            }
+
+            for (int i = 0; i < world->falling_count; i++) {
+                FallingBlock* f = &world->falling[i];
+                if (!f->started) continue;
+                mat4 fall_model; glm_mat4_identity(fall_model);
+                vec3 fall_offset = {(float)f->ix, f->y, (float)f->iz};
+                glm_translate(fall_model, fall_offset);
+                glUniformMatrix4fv(u_model, 1, GL_FALSE, (float*)fall_model);
+                mesh_draw(f->type == BLOCK_GRAVEL ? &gravel_cube_mesh : &sand_cube_mesh);
             }
 
             glUseProgram(cutoutProgram);
@@ -1736,6 +1761,8 @@ int main(void) {
 
     world_save_all_dirty(world);
     world_free(world);
+    mesh_delete(&sand_cube_mesh);
+    mesh_delete(&gravel_cube_mesh);
     glDeleteTextures(1,&texture); glDeleteTextures(1,&buttonTexture); glDeleteTextures(1,&crosshairTexture);
     for (int i = 0; i < ITEM_COUNT; i++) if (item_textures[i]) glDeleteTextures(1, &item_textures[i]);
     glDeleteProgram(shaderProgram); glDeleteProgram(cutoutProgram); glDeleteProgram(uiProgram); glDeleteProgram(buttonProgram); glDeleteProgram(selectionProgram);

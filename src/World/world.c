@@ -69,6 +69,9 @@ static void load_or_generate(World* world, int slot_idx, int cx, int cz) {
                 if (s->chunk.blocks[x][y][z].type == BLOCK_WATER)
                     world_schedule_water(world,
                         cx * CHUNK_SIZE_X + x, y, cz * CHUNK_SIZE_Z + z);
+                else if (block_falls(s->chunk.blocks[x][y][z].type))
+                    world_schedule_gravity(world,
+                        cx * CHUNK_SIZE_X + x, y, cz * CHUNK_SIZE_Z + z);
 }
 
 static void save_slot_file(World* world, WorldSlot* s) {
@@ -156,6 +159,17 @@ void world_free(World* world) {
     free(world->water_hash);
     world->water_hash = NULL;
     world->water_hash_cap = 0;
+    free(world->fall_queue);
+    world->fall_queue = NULL;
+    world->fall_count = 0;
+    world->fall_cap = 0;
+    free(world->fall_hash);
+    world->fall_hash = NULL;
+    world->fall_hash_cap = 0;
+    free(world->falling);
+    world->falling = NULL;
+    world->falling_count = 0;
+    world->falling_cap = 0;
 }
 
 void world_save_chunk(World* world, int cx, int cz) {
@@ -245,6 +259,13 @@ int world_set_block(World* world, int wx, int wy, int wz, BlockType type) {
     b->type = type;
     b->level = 0;
     c->dirty = 1;
+    if (type != BLOCK_AIR && wy - 1 >= 0) {
+        Block* below = chunk_get_block(c, lx, wy - 1, lz);
+        if (below && below->type == BLOCK_GRASS_PATH) {
+            below->type = BLOCK_DIRT;
+            below->level = 0;
+        }
+    }
     world_schedule_water(world, wx, wy, wz);
     world_schedule_water(world, wx + 1, wy, wz);
     world_schedule_water(world, wx - 1, wy, wz);
@@ -252,6 +273,8 @@ int world_set_block(World* world, int wx, int wy, int wz, BlockType type) {
     world_schedule_water(world, wx, wy - 1, wz);
     world_schedule_water(world, wx, wy, wz + 1);
     world_schedule_water(world, wx, wy, wz - 1);
+    world_schedule_gravity(world, wx, wy, wz);
+    world_schedule_gravity(world, wx, wy + 1, wz);
     static const int idx2[5] = {0, -1, 1, 0, 0};
     static const int idz2[5] = {0, 0, 0, -1, 1};
     for (int i = 0; i < 5; i++) {
@@ -364,7 +387,7 @@ void world_schedule_water(World* world, int wx, int wy, int wz) {
     water_hash_insert(world, world->water_count - 1);
 }
 
-static void water_mark_mesh(World* world, int wx, int wz) {
+static void block_mark_mesh(World* world, int wx, int wz) {
     int cx = (int)floorf((float)wx / CHUNK_SIZE_X);
     int cz = (int)floorf((float)wz / CHUNK_SIZE_Z);
     int lx = wx - cx * CHUNK_SIZE_X;
@@ -386,7 +409,14 @@ static void water_set(World* world, int wx, int wy, int wz, BlockType type, uint
     int cz = (int)floorf((float)wz / CHUNK_SIZE_Z);
     Chunk* c = world_get_chunk(world, cx, cz);
     if (c) c->dirty = 1;
-    water_mark_mesh(world, wx, wz);
+    if (type != BLOCK_AIR && wy - 1 >= 0) {
+        Block* below = world_get_block(world, wx, wy - 1, wz);
+        if (below && below->type == BLOCK_GRASS_PATH) {
+            below->type = BLOCK_DIRT;
+            below->level = 0;
+        }
+    }
+    block_mark_mesh(world, wx, wz);
     world_schedule_water(world, wx, wy, wz);
     world_schedule_water(world, wx + 1, wy, wz);
     world_schedule_water(world, wx - 1, wy, wz);
@@ -394,6 +424,8 @@ static void water_set(World* world, int wx, int wy, int wz, BlockType type, uint
     world_schedule_water(world, wx, wy - 1, wz);
     world_schedule_water(world, wx, wy, wz + 1);
     world_schedule_water(world, wx, wy, wz - 1);
+    world_schedule_gravity(world, wx, wy, wz);
+    world_schedule_gravity(world, wx, wy + 1, wz);
 }
 
 int world_place_water(World* world, int wx, int wy, int wz) {
@@ -512,6 +544,181 @@ static void water_update_cell(World* world, int wx, int wy, int wz) {
                  n->level != WATER_LEVEL_FALLING &&
                  n->level < eff - 1)
             water_set(world, nx, wy, nz, BLOCK_WATER, (uint8_t)(eff - 1));
+    }
+}
+
+static uint32_t fall_pos_hash(int x, int y, int z) {
+    uint32_t h = (uint32_t)x * 73856093u ^ (uint32_t)y * 19349663u ^ (uint32_t)z * 83492791u;
+    h ^= h >> 15;
+    return h;
+}
+
+static void fall_hash_insert(World* world, int idx) {
+    uint32_t mask = (uint32_t)world->fall_hash_cap - 1;
+    FallPos* p = &world->fall_queue[idx];
+    uint32_t h = fall_pos_hash(p->x, p->y, p->z) & mask;
+    while (world->fall_hash[h]) h = (h + 1) & mask;
+    world->fall_hash[h] = idx + 1;
+}
+
+static int fall_hash_grow(World* world) {
+    int nc = world->fall_hash_cap ? world->fall_hash_cap * 2 : 1024;
+    int* nh = calloc((size_t)nc, sizeof(int));
+    if (!nh) return 0;
+    free(world->fall_hash);
+    world->fall_hash = nh;
+    world->fall_hash_cap = nc;
+    for (int i = 0; i < world->fall_count; i++)
+        fall_hash_insert(world, i);
+    return 1;
+}
+
+void world_schedule_gravity(World* world, int wx, int wy, int wz) {
+    if (wy < 0 || wy >= CHUNK_SIZE_Y) return;
+    if (world->fall_hash_cap) {
+        uint32_t mask = (uint32_t)world->fall_hash_cap - 1;
+        uint32_t h = fall_pos_hash(wx, wy, wz) & mask;
+        while (world->fall_hash[h]) {
+            FallPos* p = &world->fall_queue[world->fall_hash[h] - 1];
+            if (p->x == wx && p->y == wy && p->z == wz) return;
+            h = (h + 1) & mask;
+        }
+    }
+    if (world->fall_count >= world->fall_cap) {
+        int nc = world->fall_cap ? world->fall_cap * 2 : 256;
+        FallPos* nq = realloc(world->fall_queue, sizeof(FallPos) * nc);
+        if (!nq) return;
+        world->fall_queue = nq;
+        world->fall_cap = nc;
+    }
+    if ((world->fall_count + 1) * 2 > world->fall_hash_cap)
+        if (!fall_hash_grow(world)) return;
+    world->fall_queue[world->fall_count++] = (FallPos){wx, wy, wz};
+    fall_hash_insert(world, world->fall_count - 1);
+}
+
+static void gravity_place(World* world, int wx, int wy, int wz, BlockType type) {
+    Block* b = world_get_block(world, wx, wy, wz);
+    if (!b) return;
+    b->type = type;
+    b->level = 0;
+    int cx = (int)floorf((float)wx / CHUNK_SIZE_X);
+    int cz = (int)floorf((float)wz / CHUNK_SIZE_Z);
+    Chunk* c = world_get_chunk(world, cx, cz);
+    if (c) c->dirty = 1;
+    WorldSlot* s = world_get_slot(world, cx, cz);
+    if (s) s->lightmap_valid = 0;
+    if (type != BLOCK_AIR && wy - 1 >= 0) {
+        Block* below = world_get_block(world, wx, wy - 1, wz);
+        if (below && below->type == BLOCK_GRASS_PATH) {
+            below->type = BLOCK_DIRT;
+            below->level = 0;
+        }
+    }
+    block_mark_mesh(world, wx, wz);
+    world_schedule_water(world, wx, wy, wz);
+    world_schedule_water(world, wx + 1, wy, wz);
+    world_schedule_water(world, wx - 1, wy, wz);
+    world_schedule_water(world, wx, wy + 1, wz);
+    world_schedule_water(world, wx, wy - 1, wz);
+    world_schedule_water(world, wx, wy, wz + 1);
+    world_schedule_water(world, wx, wy, wz - 1);
+}
+
+#define FALL_START_DELAY 0.2f
+#define FALL_GRAVITY 28.0f
+
+static int falling_exists_at(World* world, int x, int y, int z) {
+    for (int i = 0; i < world->falling_count; i++) {
+        FallingBlock* f = &world->falling[i];
+        if (f->ix == x && f->iz == z && !f->started && f->y0 == y) return 1;
+    }
+    return 0;
+}
+
+static void gravity_check(World* world, int wx, int wy, int wz) {
+    Block* b = world_get_block(world, wx, wy, wz);
+    if (!b || !block_falls(b->type)) return;
+    Block* below = world_get_block(world, wx, wy - 1, wz);
+    if (!below || block_opaque(below->type)) return;
+    if (falling_exists_at(world, wx, wy, wz)) return;
+    if (world->falling_count >= world->falling_cap) {
+        int nc = world->falling_cap ? world->falling_cap * 2 : 16;
+        FallingBlock* nf = realloc(world->falling, sizeof(FallingBlock) * nc);
+        if (!nf) return;
+        world->falling = nf;
+        world->falling_cap = nc;
+    }
+    FallingBlock* f = &world->falling[world->falling_count++];
+    f->ix = wx;
+    f->iz = wz;
+    f->y0 = wy;
+    f->y = (float)wy;
+    f->vel_y = 0.0f;
+    f->delay = FALL_START_DELAY;
+    f->started = 0;
+    f->target_y = wy;
+    f->type = b->type;
+}
+
+static int falling_blocked_below(World* world, FallingBlock* f) {
+    for (int j = 0; j < world->falling_count; j++) {
+        FallingBlock* g = &world->falling[j];
+        if (g == f) continue;
+        if (!g->started) continue;
+        if (g->ix != f->ix || g->iz != f->iz) continue;
+        if (g->y0 < f->y0) return 1;
+    }
+    return 0;
+}
+
+void world_update_gravity(World* world, float dt) {
+    world->fall_timer += dt;
+    if (world->fall_timer >= 0.1f) {
+        world->fall_timer = 0.0f;
+        int count = world->fall_count;
+        if (count > 0) {
+            FallPos* batch = malloc(sizeof(FallPos) * count);
+            if (batch) {
+                memcpy(batch, world->fall_queue, sizeof(FallPos) * count);
+                world->fall_count = 0;
+                if (world->fall_hash_cap)
+                    memset(world->fall_hash, 0, sizeof(int) * world->fall_hash_cap);
+                for (int i = 0; i < count; i++)
+                    gravity_check(world, batch[i].x, batch[i].y, batch[i].z);
+                free(batch);
+            }
+        }
+    }
+    for (int i = 0; i < world->falling_count; i++) {
+        FallingBlock* f = &world->falling[i];
+        if (!f->started) {
+            f->delay -= dt;
+            if (f->delay <= 0.0f) {
+                if (falling_blocked_below(world, f)) continue;
+                f->started = 1;
+                gravity_place(world, f->ix, f->y0, f->iz, BLOCK_AIR);
+                world_schedule_gravity(world, f->ix, f->y0 + 1, f->iz);
+                int ty = 0;
+                for (int yy = f->y0 - 1; yy >= 0; yy--) {
+                    Block* bb = world_get_block(world, f->ix, yy, f->iz);
+                    if (!bb || block_opaque(bb->type)) { ty = yy + 1; break; }
+                }
+                f->target_y = ty;
+                f->y = (float)f->y0;
+                f->vel_y = 0.0f;
+            }
+            continue;
+        }
+        f->vel_y += FALL_GRAVITY * dt;
+        f->y -= f->vel_y * dt;
+        if (f->y <= (float)f->target_y) {
+            f->y = (float)f->target_y;
+            gravity_place(world, f->ix, f->target_y, f->iz, f->type);
+            world->falling[i] = world->falling[world->falling_count - 1];
+            world->falling_count--;
+            i--;
+        }
     }
 }
 

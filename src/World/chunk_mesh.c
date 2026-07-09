@@ -32,8 +32,10 @@ static int block_face_texture_layer(BlockType type, int face) {
         case BLOCK_SAND:         return 14;
         case BLOCK_GRAVEL:       return 15;
         case BLOCK_AIR:
+            return 0;
         case BLOCK_GRASS_PATH:
-            if (face == 0 || face == 1) return 17;
+            if (face == 0) return 17;
+            if (face == 1) return 0;
             return 16;
         default:                return 0;
     }
@@ -266,6 +268,11 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
     if (face >= 2) {
         float flipped[4][2] = {{0,1},{1,1},{1,0},{0,0}};
         for (int i = 0; i < 4; ++i) { uvs[i][0]=flipped[i][0]; uvs[i][1]=flipped[i][1]; }
+        if (top < 1.0f) {
+            float crop = 1.0f - top;
+            for (int i = 0; i < 4; ++i)
+                if (uvs[i][1] < 0.5f) uvs[i][1] = crop;
+        }
     }
     int base = *vc;
     for (int i = 0; i < 4; i++) {
@@ -483,7 +490,7 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
                     if (is_water) {
                         if (have_n && ntype != BLOCK_AIR && !block_transparent(ntype)) continue;
                     } else {
-                        if (have_n && block_opaque(ntype) && !block_transparent(ntype)) continue;
+                        if (have_n && block_full_cube(ntype) && !block_transparent(ntype)) continue;
                         if (have_n && type == BLOCK_GLASS && ntype == BLOCK_GLASS) continue;
                         if (have_n && type == BLOCK_OAK_LEAVES && ntype == BLOCK_OAK_LEAVES) continue;
                     }
@@ -557,6 +564,16 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
     *out_solid = mesh_create(verts, vc * 9 * sizeof(GLfloat), inds, ic * sizeof(GLuint));
     *out_water = mesh_create(wverts, wvc * 9 * sizeof(GLfloat), winds, wic * sizeof(GLuint));
     *out_cutout = mesh_create(cverts, cvc * 9 * sizeof(GLfloat), cinds, cic * sizeof(GLuint));
+}
+
+Mesh chunk_mesh_build_block(BlockType type) {
+    GLfloat verts[6 * 4 * 9];
+    GLuint inds[6 * 6];
+    int vc = 0, ic = 0;
+    float full[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    for (int face = 0; face < 6; face++)
+        add_face(verts, inds, &vc, &ic, 0.0f, 0.0f, 0.0f, face, type, full, NULL);
+    return mesh_create(verts, vc * 9 * sizeof(GLfloat), inds, ic * sizeof(GLuint));
 }
 
 void chunk_build_mesh_with_neighbors(Chunk* chunk, Chunk* neighbors[4], int dynamic,

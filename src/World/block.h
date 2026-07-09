@@ -44,4 +44,12 @@ static inline int block_stops_skylight(BlockType type) {
     return block_opaque(type) && type != BLOCK_GLASS;
 }
 
+static inline int block_full_cube(BlockType type) {
+    return block_opaque(type) && type != BLOCK_GRASS_PATH;
+}
+
+static inline int block_falls(BlockType type) {
+    return type == BLOCK_SAND || type == BLOCK_GRAVEL;
+}
+
 #endif

@@ -14,5 +14,6 @@ void chunk_compute_lightmap(Chunk* chunk, uint8_t out[16][128][16]);
 void chunk_mesh_set_soft_lighting(int enabled);
 void chunk_mesh_set_directional_lighting(int enabled);
 void chunk_mesh_set_shadow_dir(float step_x, float step_z);
+Mesh chunk_mesh_build_block(BlockType type);
 
 #endif
