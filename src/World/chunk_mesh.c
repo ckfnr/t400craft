@@ -32,6 +32,9 @@ static int block_face_texture_layer(BlockType type, int face) {
         case BLOCK_SAND:         return 14;
         case BLOCK_GRAVEL:       return 15;
         case BLOCK_AIR:
+        case BLOCK_GRASS_PATH:
+            if (face == 0 || face == 1) return 17;
+            return 16;
         default:                return 0;
     }
 }
@@ -210,13 +213,14 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
     static const float face_dim[] = {1.0f, 0.6f, 0.8f, 0.8f, 0.7f, 0.7f};
     float dim = directional_lighting_enabled ? 1.0f : face_dim[face];
     float layer = (float)block_face_texture_layer(type, face);
+    float top = (type == BLOCK_GRASS_PATH) ? (15.0f / 16.0f) : 1.0f;
     float positions[4][3];
     switch (face) {
         case 0:
-            positions[0][0]=x;   positions[0][1]=y+1; positions[0][2]=z+1;
-            positions[1][0]=x+1; positions[1][1]=y+1; positions[1][2]=z+1;
-            positions[2][0]=x+1; positions[2][1]=y+1; positions[2][2]=z;
-            positions[3][0]=x;   positions[3][1]=y+1; positions[3][2]=z;
+            positions[0][0]=x;   positions[0][1]=y+top; positions[0][2]=z+1;
+            positions[1][0]=x+1; positions[1][1]=y+top; positions[1][2]=z+1;
+            positions[2][0]=x+1; positions[2][1]=y+top; positions[2][2]=z;
+            positions[3][0]=x;   positions[3][1]=y+top; positions[3][2]=z;
             break;
         case 1:
             positions[0][0]=x;   positions[0][1]=y; positions[0][2]=z;
@@ -227,26 +231,26 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
         case 2:
             positions[0][0]=x;   positions[0][1]=y;   positions[0][2]=z+1;
             positions[1][0]=x+1; positions[1][1]=y;   positions[1][2]=z+1;
-            positions[2][0]=x+1; positions[2][1]=y+1; positions[2][2]=z+1;
-            positions[3][0]=x;   positions[3][1]=y+1; positions[3][2]=z+1;
+            positions[2][0]=x+1; positions[2][1]=y+top; positions[2][2]=z+1;
+            positions[3][0]=x;   positions[3][1]=y+top; positions[3][2]=z+1;
             break;
         case 3:
             positions[0][0]=x+1; positions[0][1]=y;   positions[0][2]=z;
             positions[1][0]=x;   positions[1][1]=y;   positions[1][2]=z;
-            positions[2][0]=x;   positions[2][1]=y+1; positions[2][2]=z;
-            positions[3][0]=x+1; positions[3][1]=y+1; positions[3][2]=z;
+            positions[2][0]=x;   positions[2][1]=y+top; positions[2][2]=z;
+            positions[3][0]=x+1; positions[3][1]=y+top; positions[3][2]=z;
             break;
         case 4:
             positions[0][0]=x; positions[0][1]=y;   positions[0][2]=z;
             positions[1][0]=x; positions[1][1]=y;   positions[1][2]=z+1;
-            positions[2][0]=x; positions[2][1]=y+1; positions[2][2]=z+1;
-            positions[3][0]=x; positions[3][1]=y+1; positions[3][2]=z;
+            positions[2][0]=x; positions[2][1]=y+top; positions[2][2]=z+1;
+            positions[3][0]=x; positions[3][1]=y+top; positions[3][2]=z;
             break;
         default:
             positions[0][0]=x+1; positions[0][1]=y;   positions[0][2]=z+1;
             positions[1][0]=x+1; positions[1][1]=y;   positions[1][2]=z;
-            positions[2][0]=x+1; positions[2][1]=y+1; positions[2][2]=z;
-            positions[3][0]=x+1; positions[3][1]=y+1; positions[3][2]=z+1;
+            positions[2][0]=x+1; positions[2][1]=y+top; positions[2][2]=z;
+            positions[3][0]=x+1; positions[3][1]=y+top; positions[3][2]=z+1;
             break;
     }
     if (ch) {
@@ -254,7 +258,7 @@ static void add_face(GLfloat* verts, GLuint* inds, int* vc, int* ic,
             if (positions[i][1] > y + 0.5f) {
                 int xi = positions[i][0] > x + 0.5f;
                 int zi = positions[i][2] > z + 0.5f;
-                positions[i][1] = y + ch[xi * 2 + zi];
+                positions[i][1] = y + ch[xi * 2 + zi] * top;
             }
         }
     }

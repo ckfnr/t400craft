@@ -21,6 +21,7 @@ typedef enum {
     BLOCK_OBSIDIAN,
     BLOCK_SAND,
     BLOCK_GRAVEL,
+    BLOCK_GRASS_PATH,
 } BlockType;
 
 #define WATER_LEVEL_SOURCE  8

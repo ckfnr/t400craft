@@ -167,7 +167,7 @@ typedef struct {
 } ItemDef;
 
 //defining the items
-#define ITEM_COUNT 15
+#define ITEM_COUNT 16
 static const ItemDef item_defs[ITEM_COUNT] = {
     {NULL,                            BLOCK_AIR,         0},
     {"src/textures/cobblestone.png",  BLOCK_COBBLESTONE, 0},
@@ -184,6 +184,7 @@ static const ItemDef item_defs[ITEM_COUNT] = {
     {"src/textures/sand.png",         BLOCK_SAND,        0},
     {"src/textures/obsidian.png", BLOCK_OBSIDIAN, 0},
     {"src/textures/gravel.png", BLOCK_GRAVEL, 0},
+    {"src/textures/grass_path_side.png", BLOCK_GRASS_PATH, 0},
 };
 
 #define INV_SIZE 36
@@ -683,8 +684,10 @@ int main(void) {
         "src/textures/obsidian.png",
         "src/textures/sand.png",
         "src/textures/gravel.png",
+        "src/textures/grass_path_side.png",
+        "src/textures/grass_path_top.png",
     };
-    GLuint texture = load_texture_array(world_textures, 16);
+    GLuint texture = load_texture_array(world_textures, 18);
 
     int buttonW, buttonH, buttonCh;
     unsigned char* buttonBytes = stbi_load("src/UI/button.png", &buttonW, &buttonH, &buttonCh, 4);
