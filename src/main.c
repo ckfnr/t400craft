@@ -344,6 +344,7 @@ typedef struct {
     int soft_lighting;
     int day_night_cycle;
     float day_time;
+    int anti_aliasing;
 } Settings;
 
 static void load_settings(const char* path, Settings* settings) {
@@ -355,6 +356,7 @@ static void load_settings(const char* path, Settings* settings) {
     int soft_lighting = settings->soft_lighting;
     int day_night_cycle = settings->day_night_cycle;
     float day_time = settings->day_time;
+    int anti_aliasing = settings->anti_aliasing;
     if (fscanf(f, "%d %f %d", &fps_cap, &render_distance_chunks, &gravity_enabled) == 3) {
         settings->fps_cap = fps_cap;
         settings->render_distance_chunks = render_distance_chunks;
@@ -363,8 +365,11 @@ static void load_settings(const char* path, Settings* settings) {
             settings->soft_lighting = soft_lighting ? 1 : 0;
             if (fscanf(f, "%d", &day_night_cycle) == 1) {
                 settings->day_night_cycle = day_night_cycle ? 1 : 0;
-                if (fscanf(f, "%f", &day_time) == 1)
+                if (fscanf(f, "%f", &day_time) == 1) {
                     settings->day_time = day_time;
+                    if (fscanf(f, "%d", &anti_aliasing) == 1)
+                        settings->anti_aliasing = anti_aliasing ? 1 : 0;
+                }
             }
         }
     }
@@ -374,7 +379,7 @@ static void load_settings(const char* path, Settings* settings) {
 static void save_settings(const char* path, const Settings* settings) {
     FILE* f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "%d %.3f %d %d %d %.2f\n", settings->fps_cap, settings->render_distance_chunks, settings->gravity_enabled ? 1 : 0, settings->soft_lighting ? 1 : 0, settings->day_night_cycle ? 1 : 0, settings->day_time);
+    fprintf(f, "%d %.3f %d %d %d %.2f %d\n", settings->fps_cap, settings->render_distance_chunks, settings->gravity_enabled ? 1 : 0, settings->soft_lighting ? 1 : 0, settings->day_night_cycle ? 1 : 0, settings->day_time, settings->anti_aliasing ? 1 : 0);
     fclose(f);
 }
 
@@ -510,6 +515,38 @@ static void draw_sky_body(GLuint program, GLuint vao, GLuint vbo, GLint u_cam, G
     glEnable(GL_CULL_FACE);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
+}
+
+static void ensure_msaa_targets(GLuint* fbo, GLuint* color_rbo, GLuint* depth_rbo, int* cur_w, int* cur_h, int w, int h) {
+    if (*fbo && *cur_w == w && *cur_h == h) return;
+    if (*fbo) {
+        glDeleteFramebuffers(1, fbo);
+        glDeleteRenderbuffers(1, color_rbo);
+        glDeleteRenderbuffers(1, depth_rbo);
+        *fbo = 0;
+    }
+    if (w <= 0 || h <= 0) return;
+    glGenFramebuffers(1, fbo);
+    glGenRenderbuffers(1, color_rbo);
+    glGenRenderbuffers(1, depth_rbo);
+    glBindRenderbuffer(GL_RENDERBUFFER, *color_rbo);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, 4, GL_RGBA8, w, h);
+    glBindRenderbuffer(GL_RENDERBUFFER, *depth_rbo);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, 4, GL_DEPTH_COMPONENT24, w, h);
+    glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, *color_rbo);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, *depth_rbo);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        glDeleteFramebuffers(1, fbo);
+        glDeleteRenderbuffers(1, color_rbo);
+        glDeleteRenderbuffers(1, depth_rbo);
+        *fbo = 0; *cur_w = 0; *cur_h = 0;
+        return;
+    }
+    *cur_w = w; *cur_h = h;
 }
 
 int main(void) {
@@ -810,6 +847,9 @@ int main(void) {
     int paused_drag_slider = 0;
     int soft_lighting = 1;                      //standard setting at start
     int day_night_cycle = 1;                    //standard setting at start
+    int anti_aliasing = 1;                      //standard setting at start
+    GLuint msaa_fbo = 0, msaa_color_rbo = 0, msaa_depth_rbo = 0;
+    int msaa_w = 0, msaa_h = 0;
     const float DAY_LENGTH_SECONDS = 1200.0f;   //length of a day-night-cycle in seconds (20 minutes by default)
     const float DAY_TIME_STATIC = 182.44f;
     float day_time = DAY_LENGTH_SECONDS * 0.25f;
@@ -817,7 +857,7 @@ int main(void) {
     Uint64 fps_perf_freq = SDL_GetPerformanceFrequency();
     Uint64 fps_frame_start_counter = SDL_GetPerformanceCounter();
     double fps_next_deadline_seconds = (double)fps_frame_start_counter / (double)fps_perf_freq;
-    Settings settings = { fps_cap, render_distance_chunks, gravity_enabled, soft_lighting, day_night_cycle, day_time };
+    Settings settings = { fps_cap, render_distance_chunks, gravity_enabled, soft_lighting, day_night_cycle, day_time, anti_aliasing };
     load_settings("Savefiles/settings.cfg", &settings);
     fps_cap = settings.fps_cap;
     render_distance_chunks = settings.render_distance_chunks;
@@ -825,6 +865,7 @@ int main(void) {
     soft_lighting = settings.soft_lighting;
     day_night_cycle = settings.day_night_cycle;
     day_time = settings.day_time;
+    anti_aliasing = settings.anti_aliasing;
     if (!(day_time >= 0.0f && day_time < DAY_LENGTH_SECONDS)) day_time = DAY_LENGTH_SECONDS * 0.25f;
     chunk_mesh_set_soft_lighting(soft_lighting);
     chunk_mesh_set_directional_lighting(1);
@@ -885,6 +926,7 @@ int main(void) {
                 float button_y1=slider_y2+row_gap;
                 float button_y2=button_y1+row_gap;
                 float button_y3=button_y2+row_gap;
+                float button_y4=button_y3+row_gap;
                 float mouse_x=0.0f, mouse_y=0.0f;
                 ui_window_to_drawable(window, event.button.x, event.button.y, &mouse_x, &mouse_y);
                 if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, continue_y, menu_w, row_h)) {
@@ -894,13 +936,15 @@ int main(void) {
                 } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, slider_y2, menu_w, row_h)) {
                     paused_drag_slider = 2;
                 } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, button_y1, menu_w, row_h)) {
-                    gravity_enabled=!gravity_enabled; if(!gravity_enabled) vel_y=0.0f;
+                    anti_aliasing = !anti_aliasing;
                 } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, button_y2, menu_w, row_h)) {
+                    gravity_enabled=!gravity_enabled; if(!gravity_enabled) vel_y=0.0f;
+                } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, button_y3, menu_w, row_h)) {
                     soft_lighting = !soft_lighting;
                     chunk_mesh_set_soft_lighting(soft_lighting);
                     for (int i = 0; i < WORLD_SLOTS; i++)
                         if (world->slots[i].loaded) world->slots[i].mesh_dirty = 1;
-                } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, button_y3, menu_w, row_h)) {
+                } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, button_y4, menu_w, row_h)) {
                     day_night_cycle = !day_night_cycle;
                 }
                 if (paused_drag_slider == 1 || paused_drag_slider == 2) {
@@ -1034,7 +1078,12 @@ int main(void) {
         sky_r = fminf(sky_r + horizon_glow * 0.30f, 1.0f);
         sky_g = fminf(sky_g + horizon_glow * 0.10f, 1.0f);
 
+        if (anti_aliasing)
+            ensure_msaa_targets(&msaa_fbo, &msaa_color_rbo, &msaa_depth_rbo, &msaa_w, &msaa_h, screen_w, screen_h);
+        int use_msaa = anti_aliasing && msaa_fbo != 0;
+        glBindFramebuffer(GL_FRAMEBUFFER, use_msaa ? msaa_fbo : 0);
         glClearColor(sky_r, sky_g, sky_b, 1.0f);
+        if (use_msaa) glEnable(GL_MULTISAMPLE);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glUseProgram(cutoutProgram);
         glUniform3f(u_cut_light_dir, light_dx, light_dy, light_dz);
@@ -1341,6 +1390,13 @@ int main(void) {
                 glUseProgram(shaderProgram);
             }
 
+            if (anti_aliasing && msaa_fbo != 0) {
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, msaa_fbo);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+                glBlitFramebuffer(0, 0, screen_w, screen_h, 0, 0, screen_w, screen_h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            }
+
             if (head_in_water) {
                 glDisable(GL_DEPTH_TEST);
                 glDisable(GL_CULL_FACE);
@@ -1537,6 +1593,9 @@ int main(void) {
             }
 
         } else {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glClearColor(sky_r, sky_g, sky_b, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             float pry=cam.position[1];
             cam.position[1]+=crouching?CROUCH_EYE:STAND_EYE;
             camera_update(&cam,45.0f,0.1f,1000.0f);
@@ -1624,6 +1683,7 @@ int main(void) {
             float button_y1=slider_y2+row_gap;
             float button_y2=button_y1+row_gap;
             float button_y3=button_y2+row_gap;
+            float button_y4=button_y3+row_gap;
 
             int mouse_x=0, mouse_y=0;
             Uint32 mouse_mask = SDL_GetMouseState(&mouse_x, &mouse_y);
@@ -1645,8 +1705,8 @@ int main(void) {
             glUniform2f(u_btn_screenSize,(float)screen_w,(float)screen_h);
             glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D,buttonTexture);
             glUniform1i(u_btn_tex,1);
-            float button_ys[]={continue_y,button_y1,button_y2,button_y3};
-            for(int b=0;b<4;b++){
+            float button_ys[]={continue_y,button_y1,button_y2,button_y3,button_y4};
+            for(int b=0;b<5;b++){
                 float by2=button_ys[b];
                 float bv[24]={panel_x,by2,0,0, panel_x+panel_w,by2,1,0, panel_x+panel_w,by2+row_h,1,1, panel_x,by2,0,0, panel_x+panel_w,by2+row_h,1,1, panel_x,by2+row_h,0,1};
                 glBufferSubData(GL_ARRAY_BUFFER,0,sizeof(bv),bv);
@@ -1706,11 +1766,12 @@ int main(void) {
             glUseProgram(uiProgram); glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER,uiVBO);
             float tverts[32768]; int tc=0; float ts=2.2f;
             const char* lbls[]={ "continue playing",
+                                  anti_aliasing?"anti-aliasing: on":"anti-aliasing: off",
                                   gravity_enabled?"gravity: on":"gravity: off",
                                   soft_lighting?"lighting: soft":"lighting: hard",
                                   day_night_cycle?"day-night-cycle: on":"day-night-cycle: off" };
-            float ypos[]={continue_y,button_y1,button_y2,button_y3};
-            for(int b=0;b<4;b++){
+            float ypos[]={continue_y,button_y1,button_y2,button_y3,button_y4};
+            for(int b=0;b<5;b++){
                 tc=0; float tw=0;
                 for(const char* ch=lbls[b];*ch;++ch) tw+=(*ch==' ')?4.0f*ts:6.0f*ts;
                 build_text_vertices(lbls[b],panel_x+(panel_w-tw)*0.5f,ypos[b]+(row_h-7*ts)*0.5f,ts,tverts,&tc);
@@ -1757,6 +1818,7 @@ int main(void) {
     settings.soft_lighting = soft_lighting;
     settings.day_night_cycle = day_night_cycle;
     settings.day_time = day_time;
+    settings.anti_aliasing = anti_aliasing;
     save_settings("Savefiles/settings.cfg", &settings);
     inventory_put_back(inventory, &drag_item, &drag_from);
     save_inventory("Savefiles/inventory.bin", inventory);
@@ -1765,6 +1827,11 @@ int main(void) {
     world_free(world);
     mesh_delete(&sand_cube_mesh);
     mesh_delete(&gravel_cube_mesh);
+    if (msaa_fbo) {
+        glDeleteFramebuffers(1, &msaa_fbo);
+        glDeleteRenderbuffers(1, &msaa_color_rbo);
+        glDeleteRenderbuffers(1, &msaa_depth_rbo);
+    }
     glDeleteTextures(1,&texture); glDeleteTextures(1,&buttonTexture); glDeleteTextures(1,&crosshairTexture);
     for (int i = 0; i < ITEM_COUNT; i++) if (item_textures[i]) glDeleteTextures(1, &item_textures[i]);
     glDeleteProgram(shaderProgram); glDeleteProgram(cutoutProgram); glDeleteProgram(uiProgram); glDeleteProgram(buttonProgram); glDeleteProgram(selectionProgram);
