@@ -1,3 +1,6 @@
+//specialized shader for leaves & glass
+//hidden faces get culled
+
 #version 120
 #extension GL_EXT_texture_array : enable
 varying vec3 color;
