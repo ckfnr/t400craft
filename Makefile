@@ -9,7 +9,8 @@ SRCS = src/main.c \
        src/Camera/Camera.c \
        src/World/chunk.c \
        src/World/world.c \
-       src/World/chunk_mesh.c
+       src/World/chunk_mesh.c \
+       src/World/menu.c
 
 t400craft: $(SRCS)
 	$(CC) $(CFLAGS) $(SRCS) -o t400craft $(LIBS)

@@ -6,6 +6,9 @@
 #include <sys/stat.h>
 #include <math.h>
 
+#define WORLD_WATER_UPDATE_BUDGET 384
+#define WORLD_GRAVITY_QUEUE_BUDGET 256
+
 static void slot_index(int cx, int cz, int center_cx, int center_cz, int* out_idx) {
     if (cx < center_cx - WORLD_RADIUS || cx > center_cx + WORLD_RADIUS ||
         cz < center_cz - WORLD_RADIUS || cz > center_cz + WORLD_RADIUS) {
@@ -61,7 +64,7 @@ static void load_or_generate(World* world, int slot_idx, int cx, int cz) {
                 }
         free(buf);
     } else {
-        chunk_generate(&s->chunk, cx, cz);
+        chunk_generate(&s->chunk, cx, cz, world->gen_seed, world->gen_natural);
     }
     for (int x = 0; x < CHUNK_SIZE_X; x++)
         for (int y = 0; y < CHUNK_SIZE_Y; y++)
@@ -129,17 +132,20 @@ static void load_missing_slot(World* world, int idx, int cx, int cz) {
     mark_neighbor_meshes_dirty(world, cx, cz);
 }
 
-void world_init(World* world, int center_cx, int center_cz, const char* save_dir) {
+void world_init(World* world, int center_cx, int center_cz, const char* save_dir, uint32_t seed, int natural) {
     memset(world, 0, sizeof(World));
     strncpy(world->save_dir, save_dir, sizeof(world->save_dir) - 1);
     world->center_cx = center_cx;
     world->center_cz = center_cz;
+    world->gen_seed = seed;
+    world->gen_natural = natural ? 1 : 0;
     world->dynamic_lighting = 1;
 
     mkdir(save_dir, 0755);
 
-    for (int cz = center_cz - WORLD_RADIUS; cz <= center_cz + WORLD_RADIUS; cz++) {
-        for (int cx = center_cx - WORLD_RADIUS; cx <= center_cx + WORLD_RADIUS; cx++) {
+    const int initial_radius = 2;
+    for (int cz = center_cz - initial_radius; cz <= center_cz + initial_radius; cz++) {
+        for (int cx = center_cx - initial_radius; cx <= center_cx + initial_radius; cx++) {
             int idx;
             slot_index(cx, cz, center_cx, center_cz, &idx);
             load_or_generate(world, idx, cx, cz);
@@ -678,16 +684,16 @@ void world_update_gravity(World* world, float dt) {
         world->fall_timer = 0.0f;
         int count = world->fall_count;
         if (count > 0) {
-            FallPos* batch = malloc(sizeof(FallPos) * count);
-            if (batch) {
-                memcpy(batch, world->fall_queue, sizeof(FallPos) * count);
-                world->fall_count = 0;
-                if (world->fall_hash_cap)
-                    memset(world->fall_hash, 0, sizeof(int) * world->fall_hash_cap);
-                for (int i = 0; i < count; i++)
-                    gravity_check(world, batch[i].x, batch[i].y, batch[i].z);
-                free(batch);
-            }
+            int process = count > WORLD_GRAVITY_QUEUE_BUDGET ? WORLD_GRAVITY_QUEUE_BUDGET : count;
+            FallPos batch[WORLD_GRAVITY_QUEUE_BUDGET];
+            for (int i = 0; i < process; i++)
+                batch[i] = world->fall_queue[--world->fall_count];
+            if (world->fall_hash_cap)
+                memset(world->fall_hash, 0, sizeof(int) * world->fall_hash_cap);
+            for (int i = 0; i < world->fall_count; i++)
+                fall_hash_insert(world, i);
+            for (int i = 0; i < process; i++)
+                gravity_check(world, batch[i].x, batch[i].y, batch[i].z);
         }
     }
     for (int i = 0; i < world->falling_count; i++) {
@@ -728,13 +734,14 @@ void world_update_water(World* world, float dt) {
     world->water_timer = 0.0f;
     int count = world->water_count;
     if (count == 0) return;
-    WaterPos* batch = malloc(sizeof(WaterPos) * count);
-    if (!batch) return;
-    memcpy(batch, world->water_queue, sizeof(WaterPos) * count);
-    world->water_count = 0;
+    int process = count > WORLD_WATER_UPDATE_BUDGET ? WORLD_WATER_UPDATE_BUDGET : count;
+    WaterPos batch[WORLD_WATER_UPDATE_BUDGET];
+    for (int i = 0; i < process; i++)
+        batch[i] = world->water_queue[--world->water_count];
     if (world->water_hash_cap)
         memset(world->water_hash, 0, sizeof(int) * world->water_hash_cap);
-    for (int i = 0; i < count; i++)
+    for (int i = 0; i < world->water_count; i++)
+        water_hash_insert(world, i);
+    for (int i = 0; i < process; i++)
         water_update_cell(world, batch[i].x, batch[i].y, batch[i].z);
-    free(batch);
 }

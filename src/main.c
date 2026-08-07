@@ -12,6 +12,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <SDL2/SDL.h>
 #include <GL/glew.h>
 #include <float.h>
@@ -25,9 +26,40 @@
 #include "World/chunk.h"
 #include "World/world.h"
 #include "World/chunk_mesh.h"
+#include "World/menu.h"
 
 const unsigned int width = 800;
 const unsigned int height = 800;
+
+static int g_wayland_video_driver = 0;
+static int g_use_relative_mouse = 1;
+
+static void capture_relative_mouse(SDL_Window* window) {
+    if (window) {
+        int want_grab = g_use_relative_mouse ? (g_wayland_video_driver ? SDL_FALSE : SDL_TRUE) : SDL_TRUE;
+        SDL_SetWindowGrab(window, want_grab ? SDL_TRUE : SDL_FALSE);
+    }
+    if (g_use_relative_mouse) {
+        SDL_SetRelativeMouseMode(SDL_TRUE);
+    } else {
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+    }
+    SDL_ShowCursor(SDL_DISABLE);
+    SDL_PumpEvents();
+    SDL_FlushEvent(SDL_MOUSEMOTION);
+    if (g_use_relative_mouse) {
+        SDL_GetRelativeMouseState(NULL, NULL);
+    }
+}
+
+static void release_relative_mouse(SDL_Window* window) {
+    if (window) {
+        SDL_SetWindowGrab(window, SDL_FALSE);
+    }
+    SDL_SetRelativeMouseMode(SDL_FALSE);
+    SDL_ShowCursor(SDL_ENABLE);
+    SDL_FlushEvent(SDL_MOUSEMOTION);
+}
 
 static GLuint compile_shader_source(GLenum type, const char* source) {
     GLuint shader = glCreateShader(type);
@@ -109,6 +141,7 @@ static const unsigned char* glyph_rows(char c) {
     static const unsigned char u_glyph[7] = {17, 17,  17,  17,  17,  17,  14 };
     static const unsigned char v_glyph[7] = {17, 17,  17,  17,  10,  10,  4  };
     static const unsigned char w_glyph[7] = {17, 17,  17,  21,  21,  27,  17 };
+    static const unsigned char x_glyph[7] = {17, 17,  10,  4,   10,  17,  17 };
     static const unsigned char y_glyph[7] = {17, 17,  10,  4,   4,   4,   4  };
     static const unsigned char zero_glyph[7]  = {14, 17, 17, 17, 17, 17, 14};
     static const unsigned char one_glyph[7]   = { 4, 12,  4,  4,  4,  4, 14};
@@ -122,6 +155,7 @@ static const unsigned char* glyph_rows(char c) {
     static const unsigned char nine_glyph[7]  = {14, 17, 17, 15,  1, 17, 14};
     static const unsigned char hyphen_glyph[7] = {0, 0, 0, 31, 0, 0, 0};
     static const unsigned char colon_glyph[7]  = {0, 4, 0, 0, 0, 4, 0};
+    static const unsigned char amp_glyph[7]    = {12, 18, 20, 8, 21, 18, 13};
     switch (c) {
         case 'a': return a_glyph; case 'b': return b_glyph; case 'c': return c_glyph;
         case 'd': return d_glyph; case 'e': return e_glyph; case 'f': return f_glyph;
@@ -130,13 +164,14 @@ static const unsigned char* glyph_rows(char c) {
         case 'n': return n_glyph; case 'o': return o_glyph; case 'p': return p_glyph;
         case 'r': return r_glyph; case 's': return s_glyph; case 't': return t_glyph;
         case 'u': return u_glyph; case 'v': return v_glyph; case 'w': return w_glyph;
-        case 'y': return y_glyph;
+        case 'x': return x_glyph; case 'y': return y_glyph;
         case '0': return zero_glyph;  case '1': return one_glyph;
         case '2': return two_glyph;   case '3': return three_glyph;
         case '4': return four_glyph;  case '5': return five_glyph;
         case '6': return six_glyph;   case '7': return seven_glyph;
         case '8': return eight_glyph; case '9': return nine_glyph;
         case '-': return hyphen_glyph; case ':': return colon_glyph;
+        case '&': return amp_glyph;
         default:  return blank;
     }
 }
@@ -558,7 +593,24 @@ static void ensure_msaa_targets(GLuint* fbo, GLuint* color_rbo, GLuint* depth_rb
 }
 
 int main(void) {
+    SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_MODE_WARP, "0");
+#ifdef SDL_HINT_MOUSE_RELATIVE_MODE_CENTER
+    SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_MODE_CENTER, "0");
+#endif
+#ifdef SDL_HINT_VIDEO_WAYLAND_EMULATE_MOUSE_WARP
+    SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_EMULATE_MOUSE_WARP, "0");
+#endif
     SDL_Init(SDL_INIT_VIDEO);
+    {
+        const char* video_driver = SDL_GetCurrentVideoDriver();
+        g_wayland_video_driver = (video_driver && strcmp(video_driver, "wayland") == 0) ? 1 : 0;
+        g_use_relative_mouse = g_wayland_video_driver ? 0 : 1;
+        {
+            const char* force_relative = getenv("T400CRAFT_FORCE_RELATIVE");
+            if (force_relative && strcmp(force_relative, "1") == 0)
+                g_use_relative_mouse = 1;
+        }
+    }
     SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
@@ -570,8 +622,6 @@ int main(void) {
         width, height, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
 
     SDL_GLContext ctx = SDL_GL_CreateContext(window);
-    SDL_SetRelativeMouseMode(SDL_TRUE);
-    SDL_ShowCursor(SDL_DISABLE);
     SDL_GL_SetSwapInterval(0);
     glewInit();
     glViewport(0, 0, width, height);
@@ -579,6 +629,20 @@ int main(void) {
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
+
+    MenuResult menu_result;
+menu_start:
+    menu_run(window, &menu_result);
+    if (menu_result.quit) {
+        SDL_GL_DeleteContext(ctx);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 0;
+    }
+    capture_relative_mouse(window);
+    int drawable_w = (int)width, drawable_h = (int)height;
+    SDL_GL_GetDrawableSize(window, &drawable_w, &drawable_h);
+    glViewport(0, 0, drawable_w, drawable_h);
 
     char* vertSrc = load_file("src/Shaders/default.vert");
     char* fragSrc = load_file("src/Shaders/default.frag");
@@ -721,7 +785,11 @@ int main(void) {
 
     World* world = malloc(sizeof(World));
     if (!world) { SDL_Quit(); return 1; }
-    world_init(world, 0, 0, "Savefiles");
+    world_init(world, 0, 0, menu_result.world_dir, menu_result.seed, menu_result.natural);
+
+    char player_path[320], inventory_path[320];
+    snprintf(player_path, sizeof(player_path), "%s/player.bin", menu_result.world_dir);
+    snprintf(inventory_path, sizeof(inventory_path), "%s/inventory.bin", menu_result.world_dir);
 
     Mesh sand_cube_mesh = chunk_mesh_build_block(BLOCK_SAND);
     Mesh gravel_cube_mesh = chunk_mesh_build_block(BLOCK_GRAVEL);
@@ -791,7 +859,7 @@ int main(void) {
     }
     int inventory[INV_SIZE] = {0};
     for (int i = 1; i < ITEM_COUNT; i++) inventory[INV_HOTBAR_START + i - 1] = i;
-    load_inventory("Savefiles/inventory.bin", inventory);
+    load_inventory(inventory_path, inventory);
     for (int i = 1; i < ITEM_COUNT; i++) {
         int present = 0;
         for (int j = 0; j < INV_SIZE; j++) if (inventory[j] == i) present = 1;
@@ -816,10 +884,10 @@ int main(void) {
 
     Camera cam;
     vec3 start_pos = {(float)spawn_wx + 0.5f, (float)spawn_y, (float)spawn_wz + 0.5f};
-    camera_init(&cam, width, height, start_pos);
+    camera_init(&cam, drawable_w, drawable_h, start_pos);
 
     {
-        FILE* pf = fopen("Savefiles/player.bin", "rb");
+        FILE* pf = fopen(player_path, "rb");
         if (pf) {
             float px, py, pz;
             if (fread(&px,sizeof(float),1,pf)==1 &&
@@ -831,7 +899,7 @@ int main(void) {
         }
     }
 
-    int running = 1, paused = 0;
+    int running = 1, paused = 0, exit_to_menu = 0;
     SDL_Event event;
     int gravity_enabled = 1;
 
@@ -856,6 +924,10 @@ int main(void) {
     int soft_lighting = 1;                      //standard setting at start
     int day_night_cycle = 1;                    //standard setting at start
     int anti_aliasing = 1;                      //standard setting at start
+    int stream_frame_toggle = 0;
+    int mouse_abs_valid = 0;
+    int mouse_abs_last_x = 0;
+    int mouse_abs_last_y = 0;
     GLuint msaa_fbo = 0, msaa_color_rbo = 0, msaa_depth_rbo = 0;
     int msaa_w = 0, msaa_h = 0;
     const float DAY_LENGTH_SECONDS = 1200.0f;   //length of a day-night-cycle in seconds (20 minutes by default)
@@ -883,11 +955,14 @@ int main(void) {
         float ssx, ssz;
         day_cycle_shadow_steps(et, DAY_LENGTH_SECONDS, &ssx, &ssz);
         chunk_mesh_set_shadow_dir(ssx, ssz);
-        last_shadow_bucket = (int)(et / DAY_LENGTH_SECONDS * 40.0f);
+        last_shadow_bucket = (int)(et / DAY_LENGTH_SECONDS * 16.0f);
     }
+
+    capture_relative_mouse(window);
 
     while (running) {
         int break_requested=0, place_requested=0;
+        int frame_mouse_dx = 0, frame_mouse_dy = 0;
 
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) running = 0;
@@ -904,29 +979,37 @@ int main(void) {
                 inventory_open = !inventory_open;
                 if (inventory_open) {
                     mouse_right_held = 0;
-                    SDL_SetRelativeMouseMode(SDL_FALSE); SDL_ShowCursor(SDL_ENABLE);
+                    mouse_abs_valid = 0;
+                    release_relative_mouse(window);
                 } else {
                     inventory_put_back(inventory, &drag_item, &drag_from);
-                    SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click = 1;
+                    mouse_abs_valid = 0;
+                    capture_relative_mouse(window);
                 }
             }
             if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_ESCAPE) {
                 if (inventory_open) {
                     inventory_open = 0;
                     inventory_put_back(inventory, &drag_item, &drag_from);
-                    SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click = 1;
+                    mouse_abs_valid = 0;
+                    capture_relative_mouse(window);
                 } else {
                     paused = !paused;
                     paused_drag_slider = 0;
-                    if (paused) { SDL_SetRelativeMouseMode(SDL_FALSE); SDL_ShowCursor(SDL_ENABLE); }
-                    else { SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click = 1; }
+                    if (paused) {
+                        mouse_abs_valid = 0;
+                        release_relative_mouse(window);
+                    } else {
+                        mouse_abs_valid = 0;
+                        capture_relative_mouse(window);
+                    }
                 }
             } else if (!paused && event.type == SDL_KEYDOWN && event.key.repeat == 0
                        && event.key.keysym.sym == SDLK_SPACE && gravity_enabled) {
                 (void)0;
             } else if (paused && event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
                 int sw=0, sh=0; SDL_GL_GetDrawableSize(window, &sw, &sh);
-                float menu_w=360.0f, row_h=64.0f, row_gap=84.0f;
+                float menu_w=360.0f, row_h=64.0f, row_gap=72.0f;
                 float menu_x=((float)sw-menu_w)*0.5f;
                 float continue_y=(float)sh*0.17f;
                 float slider_y1=continue_y+row_h+108.0f;
@@ -935,10 +1018,11 @@ int main(void) {
                 float button_y2=button_y1+row_gap;
                 float button_y3=button_y2+row_gap;
                 float button_y4=button_y3+row_gap;
+                float button_y5=button_y4+row_gap;
                 float mouse_x=0.0f, mouse_y=0.0f;
                 ui_window_to_drawable(window, event.button.x, event.button.y, &mouse_x, &mouse_y);
                 if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, continue_y, menu_w, row_h)) {
-                    paused=0; SDL_SetRelativeMouseMode(SDL_TRUE); SDL_ShowCursor(SDL_DISABLE); cam.first_click=1;
+                    paused=0; capture_relative_mouse(window);
                 } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, slider_y1, menu_w, row_h)) {
                     paused_drag_slider = 1;
                 } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, slider_y2, menu_w, row_h)) {
@@ -954,6 +1038,10 @@ int main(void) {
                         if (world->slots[i].loaded) world->slots[i].mesh_dirty = 1;
                 } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, button_y4, menu_w, row_h)) {
                     day_night_cycle = !day_night_cycle;
+                } else if (point_in_rect((int)mouse_x, (int)mouse_y, menu_x, button_y5, menu_w, row_h)) {
+                    world_save_all_dirty(world);
+                    running = 0;
+                    exit_to_menu = 1;
                 }
                 if (paused_drag_slider == 1 || paused_drag_slider == 2) {
                     float t = clampf_local((mouse_x - menu_x) / menu_w, 0.0f, 1.0f);
@@ -1006,16 +1094,45 @@ int main(void) {
             } else if (event.type == SDL_MOUSEBUTTONUP) {
                 if (event.button.button == SDL_BUTTON_RIGHT)      mouse_right_held=0;
             }
-            if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
-                int w,h; SDL_GL_GetDrawableSize(window,&w,&h);
-                glViewport(0,0,w,h); cam.width=w; cam.height=h;
+
+            if (!paused && !inventory_open && event.type == SDL_MOUSEMOTION) {
+                if (g_use_relative_mouse) {
+                    frame_mouse_dx += event.motion.xrel;
+                    frame_mouse_dy += event.motion.yrel;
+                } else {
+                    int mx = event.motion.x;
+                    int my = event.motion.y;
+                    if (mouse_abs_valid) {
+                        frame_mouse_dx += (mx - mouse_abs_last_x);
+                        frame_mouse_dy += (my - mouse_abs_last_y);
+                    }
+                    mouse_abs_last_x = mx;
+                    mouse_abs_last_y = my;
+                    mouse_abs_valid = 1;
+                }
+            }
+
+            if (event.type == SDL_WINDOWEVENT) {
+                if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                    int w,h; SDL_GL_GetDrawableSize(window,&w,&h);
+                    glViewport(0,0,w,h); cam.width=w; cam.height=h;
+                }
+                if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+                    mouse_abs_valid = 0;
+                    release_relative_mouse(window);
+                }
+                if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED && !paused && !inventory_open) {
+                    mouse_abs_valid = 0;
+                    capture_relative_mouse(window);
+                }
             }
         }
 
         int cx_player = (int)floorf(cam.position[0] / CHUNK_SIZE_X);
         int cz_player = (int)floorf(cam.position[2] / CHUNK_SIZE_Z);
         world_update_center(world, cx_player, cz_player);
-        world_stream_missing(world, 4);
+        stream_frame_toggle ^= 1;
+        world_stream_missing(world, stream_frame_toggle ? 1 : 0);
 
         {
             Uint64 rb_start = SDL_GetPerformanceCounter();
@@ -1029,7 +1146,7 @@ int main(void) {
                         world_rebuild_mesh(world, s->chunk.cx, s->chunk.cz);
                         rebuilt++;
                         double rb_elapsed = (double)(SDL_GetPerformanceCounter() - rb_start) / (double)fps_perf_freq;
-                        if (rebuilt >= 1 && rb_elapsed >= 0.006) goto rebuild_done;
+                        if (rebuilt >= 1 && rb_elapsed >= 0.0025) goto rebuild_done;
                     }
                 }
             }
@@ -1054,7 +1171,7 @@ int main(void) {
         float light_dx, light_dy, light_dz;
         float light_ambient, light_diffuse;
         day_cycle_sun_dir(effective_day_time, DAY_LENGTH_SECONDS, &sun_dir_x, &sun_dir_y, &sun_dir_z);
-        int shadow_bucket = (int)(effective_day_time / DAY_LENGTH_SECONDS * 40.0f);
+        int shadow_bucket = (int)(effective_day_time / DAY_LENGTH_SECONDS * 16.0f);
         if (shadow_bucket != last_shadow_bucket) {
             last_shadow_bucket = shadow_bucket;
             float ssx, ssz;
@@ -1065,7 +1182,7 @@ int main(void) {
                 if (!s->loaded) continue;
                 float swx = (float)(s->chunk.cx * CHUNK_SIZE_X);
                 float swz = (float)(s->chunk.cz * CHUNK_SIZE_Z);
-                if (!chunk_within_render_distance(cam.position[0], cam.position[2], swx, swz, render_distance_chunks + 2.0f)) continue;
+                if (!chunk_within_render_distance(cam.position[0], cam.position[2], swx, swz, render_distance_chunks + 0.5f)) continue;
                 s->mesh_dirty = 1;
             }
         }
@@ -1126,12 +1243,10 @@ int main(void) {
         }
 
         if (!paused) {
-            int mouse_dx=0, mouse_dy=0;
-            SDL_GetRelativeMouseState(&mouse_dx, &mouse_dy);
             static const Uint8 locked_keys[SDL_NUM_SCANCODES];
             const Uint8* keys = SDL_GetKeyboardState(NULL);
             if (inventory_open) keys = locked_keys;
-            else camera_rotate(&cam, mouse_dx, mouse_dy);
+            else camera_rotate(&cam, frame_mouse_dx, frame_mouse_dy);
 
             vec3 wish_dir; int sprinting=0;
             camera_get_wish_dir(&cam, keys, wish_dir, &sprinting);
@@ -1683,7 +1798,7 @@ int main(void) {
             glUniform4f(u_ui_color,0.35f,0.35f,0.35f,0.65f);
             glDrawArrays(GL_TRIANGLES,0,6);
 
-            float panel_w=360.0f, row_h=64.0f, row_gap=84.0f, slider_h=12.0f, knob_w=14.0f;
+            float panel_w=360.0f, row_h=64.0f, row_gap=72.0f, slider_h=12.0f, knob_w=14.0f;
             float panel_x=((float)screen_w-panel_w)*0.5f;
             float continue_y=(float)screen_h*0.17f;
             float slider_y1=continue_y+row_h+108.0f;
@@ -1692,6 +1807,7 @@ int main(void) {
             float button_y2=button_y1+row_gap;
             float button_y3=button_y2+row_gap;
             float button_y4=button_y3+row_gap;
+            float button_y5=button_y4+row_gap;
 
             int mouse_x=0, mouse_y=0;
             Uint32 mouse_mask = SDL_GetMouseState(&mouse_x, &mouse_y);
@@ -1713,8 +1829,8 @@ int main(void) {
             glUniform2f(u_btn_screenSize,(float)screen_w,(float)screen_h);
             glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D,buttonTexture);
             glUniform1i(u_btn_tex,1);
-            float button_ys[]={continue_y,button_y1,button_y2,button_y3,button_y4};
-            for(int b=0;b<5;b++){
+            float button_ys[]={continue_y,button_y1,button_y2,button_y3,button_y4,button_y5};
+            for(int b=0;b<6;b++){
                 float by2=button_ys[b];
                 float bv[24]={panel_x,by2,0,0, panel_x+panel_w,by2,1,0, panel_x+panel_w,by2+row_h,1,1, panel_x,by2,0,0, panel_x+panel_w,by2+row_h,1,1, panel_x,by2+row_h,0,1};
                 glBufferSubData(GL_ARRAY_BUFFER,0,sizeof(bv),bv);
@@ -1777,9 +1893,10 @@ int main(void) {
                                   anti_aliasing?"anti-aliasing: on":"anti-aliasing: off",
                                   gravity_enabled?"gravity: on":"gravity: off",
                                   soft_lighting?"lighting: soft":"lighting: hard",
-                                  day_night_cycle?"day-night-cycle: on":"day-night-cycle: off" };
-            float ypos[]={continue_y,button_y1,button_y2,button_y3,button_y4};
-            for(int b=0;b<5;b++){
+                                  day_night_cycle?"day-night-cycle: on":"day-night-cycle: off",
+                                  "save & exit" };
+            float ypos[]={continue_y,button_y1,button_y2,button_y3,button_y4,button_y5};
+            for(int b=0;b<6;b++){
                 tc=0; float tw=0;
                 for(const char* ch=lbls[b];*ch;++ch) tw+=(*ch==' ')?4.0f*ts:6.0f*ts;
                 build_text_vertices(lbls[b],panel_x+(panel_w-tw)*0.5f,ypos[b]+(row_h-7*ts)*0.5f,ts,tverts,&tc);
@@ -1811,7 +1928,7 @@ int main(void) {
     }
 
     {
-        FILE* pf=fopen("Savefiles/player.bin","wb");
+        FILE* pf=fopen(player_path,"wb");
         if(pf){
             fwrite(&cam.position[0],sizeof(float),1,pf);
             fwrite(&cam.position[1],sizeof(float),1,pf);
@@ -1829,7 +1946,7 @@ int main(void) {
     settings.anti_aliasing = anti_aliasing;
     save_settings("Savefiles/settings.cfg", &settings);
     inventory_put_back(inventory, &drag_item, &drag_from);
-    save_inventory("Savefiles/inventory.bin", inventory);
+    save_inventory(inventory_path, inventory);
 
     world_save_all_dirty(world);
     world_free(world);
@@ -1847,6 +1964,11 @@ int main(void) {
     glDeleteBuffers(1,&buttonVBO); glDeleteVertexArrays(1,&buttonVAO);
     glDeleteBuffers(1,&selectionEBO); glDeleteBuffers(1,&selectionVBO); glDeleteVertexArrays(1,&selectionVAO);
     glDeleteBuffers(1,&skyVBO); glDeleteVertexArrays(1,&skyVAO);
+    if (exit_to_menu) {
+        free(world);
+        release_relative_mouse(window);
+        goto menu_start;
+    }
     SDL_GL_DeleteContext(ctx);
     SDL_DestroyWindow(window);
     SDL_Quit();

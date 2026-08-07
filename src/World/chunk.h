@@ -14,7 +14,7 @@ typedef struct {
     int dirty;
 } Chunk;
 
-void chunk_generate(Chunk* chunk, int cx, int cz);
+void chunk_generate(Chunk* chunk, int cx, int cz, uint32_t seed, int natural);
 Block* chunk_get_block(Chunk* chunk, int x, int y, int z);
 
 #endif

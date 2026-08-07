@@ -40,6 +40,8 @@ typedef struct {
     int center_cx;
     int center_cz;
     char save_dir[256];
+    uint32_t gen_seed;
+    int gen_natural;
     int dynamic_lighting;
     WaterPos* water_queue;
     int water_count;
@@ -58,7 +60,7 @@ typedef struct {
     int falling_cap;
 } World;
 
-void world_init(World* world, int center_cx, int center_cz, const char* save_dir);
+void world_init(World* world, int center_cx, int center_cz, const char* save_dir, uint32_t seed, int natural);
 void world_free(World* world);
 
 void world_update_center(World* world, int new_cx, int new_cz);
