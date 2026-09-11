@@ -9,9 +9,9 @@
 #define WORLD_WATER_UPDATE_BUDGET 384
 #define WORLD_GRAVITY_QUEUE_BUDGET 256
 
-static void slot_index(int cx, int cz, int center_cx, int center_cz, int* out_idx) {
-    if (cx < center_cx - WORLD_RADIUS || cx > center_cx + WORLD_RADIUS ||
-        cz < center_cz - WORLD_RADIUS || cz > center_cz + WORLD_RADIUS) {
+static void slot_index(int cx, int cz, int center_cx, int center_cz, int radius, int* out_idx) {
+    if (cx < center_cx - radius || cx > center_cx + radius ||
+        cz < center_cz - radius || cz > center_cz + radius) {
         *out_idx = -1;
         return;
     }
@@ -77,16 +77,16 @@ static void load_or_generate(World* world, int slot_idx, int cx, int cz) {
                         cx * CHUNK_SIZE_X + x, y, cz * CHUNK_SIZE_Z + z);
 }
 
-static void save_slot_file(World* world, WorldSlot* s) {
+static int save_slot_file(World* world, WorldSlot* s) {
     char path[512];
     save_path(world, s->chunk.cx, s->chunk.cz, path, sizeof(path));
     FILE* f = fopen(path, "wb");
-    if (!f) return;
+    if (!f) return 0;
     long n = (long)CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
     uint8_t* buf = malloc((size_t)(2L * n));
     if (!buf) {
         fclose(f);
-        return;
+        return 0;
     }
     long i = 0;
     for (int x = 0; x < CHUNK_SIZE_X; x++)
@@ -95,10 +95,12 @@ static void save_slot_file(World* world, WorldSlot* s) {
                 buf[i++] = (uint8_t)s->chunk.blocks[x][y][z].type;
                 buf[i++] = s->chunk.blocks[x][y][z].level;
             }
-    fwrite(buf, 1, (size_t)(2L * n), f);
+    size_t written = fwrite(buf, 1, (size_t)(2L * n), f);
     free(buf);
-    fclose(f);
+    int closed = fclose(f) == 0;
+    if (written != (size_t)(2L * n) || !closed) return 0;
     s->chunk.dirty = 0;
+    return 1;
 }
 
 static void unload_slot(World* world, int slot_idx) {
@@ -139,6 +141,7 @@ void world_init(World* world, int center_cx, int center_cz, const char* save_dir
     world->center_cz = center_cz;
     world->gen_seed = seed;
     world->gen_natural = natural ? 1 : 0;
+    world->stream_radius = WORLD_RADIUS;
     world->dynamic_lighting = 1;
 
     mkdir(save_dir, 0755);
@@ -147,7 +150,7 @@ void world_init(World* world, int center_cx, int center_cz, const char* save_dir
     for (int cz = center_cz - initial_radius; cz <= center_cz + initial_radius; cz++) {
         for (int cx = center_cx - initial_radius; cx <= center_cx + initial_radius; cx++) {
             int idx;
-            slot_index(cx, cz, center_cx, center_cz, &idx);
+            slot_index(cx, cz, center_cx, center_cz, world->stream_radius, &idx);
             load_or_generate(world, idx, cx, cz);
         }
     }
@@ -178,17 +181,19 @@ void world_free(World* world) {
     world->falling_cap = 0;
 }
 
-void world_save_chunk(World* world, int cx, int cz) {
+int world_save_chunk(World* world, int cx, int cz) {
     WorldSlot* s = world_get_slot(world, cx, cz);
-    if (!s) return;
-    save_slot_file(world, s);
+    if (!s) return 0;
+    return save_slot_file(world, s);
 }
 
-void world_save_all_dirty(World* world) {
+int world_save_all_dirty(World* world) {
+    int success = 1;
     for (int i = 0; i < WORLD_SLOTS; i++) {
         if (world->slots[i].loaded && world->slots[i].chunk.dirty)
-            world_save_chunk(world, world->slots[i].chunk.cx, world->slots[i].chunk.cz);
+            if (!world_save_chunk(world, world->slots[i].chunk.cx, world->slots[i].chunk.cz)) success = 0;
     }
+    return success;
 }
 
 void world_update_center(World* world, int new_cx, int new_cz) {
@@ -200,15 +205,57 @@ void world_update_center(World* world, int new_cx, int new_cz) {
     for (int i = 0; i < WORLD_SLOTS; i++) {
         WorldSlot* s = &world->slots[i];
         if (!s->loaded) continue;
-        if (abs(s->chunk.cx - new_cx) > WORLD_RADIUS ||
-            abs(s->chunk.cz - new_cz) > WORLD_RADIUS)
+        if (abs(s->chunk.cx - new_cx) > world->stream_radius ||
+            abs(s->chunk.cz - new_cz) > world->stream_radius)
             unload_slot(world, i);
     }
+    free(world->water_queue);
+    world->water_queue = NULL;
+    world->water_count = 0;
+    world->water_cap = 0;
+    free(world->water_hash);
+    world->water_hash = NULL;
+    world->water_hash_cap = 0;
+    free(world->fall_queue);
+    world->fall_queue = NULL;
+    world->fall_count = 0;
+    world->fall_cap = 0;
+    free(world->fall_hash);
+    world->fall_hash = NULL;
+    world->fall_hash_cap = 0;
+}
+
+void world_set_stream_radius(World* world, int radius) {
+    if (radius < 2) radius = 2;
+    if (radius > WORLD_RADIUS) radius = WORLD_RADIUS;
+    if (radius == world->stream_radius) return;
+    world->stream_radius = radius;
+    for (int i = 0; i < WORLD_SLOTS; i++) {
+        WorldSlot* s = &world->slots[i];
+        if (!s->loaded) continue;
+        if (abs(s->chunk.cx - world->center_cx) > radius ||
+            abs(s->chunk.cz - world->center_cz) > radius)
+            unload_slot(world, i);
+    }
+    free(world->water_queue);
+    world->water_queue = NULL;
+    world->water_count = 0;
+    world->water_cap = 0;
+    free(world->water_hash);
+    world->water_hash = NULL;
+    world->water_hash_cap = 0;
+    free(world->fall_queue);
+    world->fall_queue = NULL;
+    world->fall_count = 0;
+    world->fall_cap = 0;
+    free(world->fall_hash);
+    world->fall_hash = NULL;
+    world->fall_hash_cap = 0;
 }
 
 void world_stream_missing(World* world, int budget) {
     if (budget <= 0) return;
-    for (int ring = 0; ring <= WORLD_RADIUS && budget > 0; ring++) {
+    for (int ring = 0; ring <= world->stream_radius && budget > 0; ring++) {
         int min_cx = world->center_cx - ring;
         int max_cx = world->center_cx + ring;
         int min_cz = world->center_cz - ring;
@@ -218,7 +265,7 @@ void world_stream_missing(World* world, int budget) {
             for (int cz = min_cz; cz <= max_cz && budget > 0; cz++) {
                 if (abs(cx - world->center_cx) != ring && abs(cz - world->center_cz) != ring) continue;
                 int idx;
-                slot_index(cx, cz, world->center_cx, world->center_cz, &idx);
+                slot_index(cx, cz, world->center_cx, world->center_cz, world->stream_radius, &idx);
                 if (idx < 0) continue;
                 WorldSlot* s = &world->slots[idx];
                 if (s->loaded && s->chunk.cx == cx && s->chunk.cz == cz) continue;
@@ -230,7 +277,7 @@ void world_stream_missing(World* world, int budget) {
 }
 WorldSlot* world_get_slot(World* world, int cx, int cz) {
     int idx;
-    slot_index(cx, cz, world->center_cx, world->center_cz, &idx);
+    slot_index(cx, cz, world->center_cx, world->center_cz, world->stream_radius, &idx);
     if (idx < 0 || !world->slots[idx].loaded) return NULL;
     if (world->slots[idx].chunk.cx != cx || world->slots[idx].chunk.cz != cz) return NULL;
     return &world->slots[idx];
@@ -286,7 +333,7 @@ int world_set_block(World* world, int wx, int wy, int wz, BlockType type) {
     for (int i = 0; i < 5; i++) {
         WorldSlot* s = world_get_slot(world, cx + idx2[i], cz + idz2[i]);
         if (s) {
-            if (i == 0) s->lightmap_valid = 0;
+            s->lightmap_valid = 0;
             s->mesh_dirty = 1;
         }
     }
@@ -622,6 +669,12 @@ static void gravity_place(World* world, int wx, int wy, int wz, BlockType type) 
         }
     }
     block_mark_mesh(world, wx, wz);
+    static const int idx2[5] = {0, -1, 1, 0, 0};
+    static const int idz2[5] = {0, 0, 0, -1, 1};
+    for (int i = 0; i < 5; i++) {
+        WorldSlot* neighbor = world_get_slot(world, cx + idx2[i], cz + idz2[i]);
+        if (neighbor) neighbor->lightmap_valid = 0;
+    }
     world_schedule_water(world, wx, wy, wz);
     world_schedule_water(world, wx + 1, wy, wz);
     world_schedule_water(world, wx - 1, wy, wz);

@@ -129,12 +129,14 @@ static const unsigned char* glyph_rows(char c) {
     static const unsigned char g_glyph[7] = {14, 17,  16,  23,  17,  17,  14 };
     static const unsigned char h_glyph[7] = {17, 17,  17,  31,  17,  17,  17 };
     static const unsigned char i_glyph[7] = {14, 4,   4,   4,   4,   4,   14 };
+    static const unsigned char j_glyph[7] = {2,  0,   2,   2,   2,   18,  12 };
     static const unsigned char k_glyph[7] = {17, 18,  20,  28,  20,  18,  17 };
     static const unsigned char l_glyph[7] = {16, 16,  16,  16,  16,  16,  31 };
     static const unsigned char m_glyph[7] = {17, 27,  21,  21,  17,  17,  17 };
     static const unsigned char n_glyph[7] = {17, 25,  25,  21,  19,  19,  17 };
     static const unsigned char o_glyph[7] = {14, 17,  17,  17,  17,  17,  14 };
     static const unsigned char p_glyph[7] = {30, 17,  17,  30,  16,  16,  16 };
+    static const unsigned char q_glyph[7] = {14, 17,  17,  17,  21,  18,  13 };
     static const unsigned char r_glyph[7] = {30, 17,  17,  30,  20,  18,  17 };
     static const unsigned char s_glyph[7] = {14, 17,  16,  14,  1,   17,  14 };
     static const unsigned char t_glyph[7] = {31, 4,   4,   4,   4,   4,   4  };
@@ -143,6 +145,7 @@ static const unsigned char* glyph_rows(char c) {
     static const unsigned char w_glyph[7] = {17, 17,  17,  21,  21,  27,  17 };
     static const unsigned char x_glyph[7] = {17, 17,  10,  4,   10,  17,  17 };
     static const unsigned char y_glyph[7] = {17, 17,  10,  4,   4,   4,   4  };
+    static const unsigned char z_glyph[7] = {31, 1,   2,   4,   8,   16,  31 };
     static const unsigned char zero_glyph[7]  = {14, 17, 17, 17, 17, 17, 14};
     static const unsigned char one_glyph[7]   = { 4, 12,  4,  4,  4,  4, 14};
     static const unsigned char two_glyph[7]   = {14, 17,  1,  2,  4,  8, 31};
@@ -156,15 +159,18 @@ static const unsigned char* glyph_rows(char c) {
     static const unsigned char hyphen_glyph[7] = {0, 0, 0, 31, 0, 0, 0};
     static const unsigned char colon_glyph[7]  = {0, 4, 0, 0, 0, 4, 0};
     static const unsigned char amp_glyph[7]    = {12, 18, 20, 8, 21, 18, 13};
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
     switch (c) {
         case 'a': return a_glyph; case 'b': return b_glyph; case 'c': return c_glyph;
         case 'd': return d_glyph; case 'e': return e_glyph; case 'f': return f_glyph;
         case 'g': return g_glyph; case 'h': return h_glyph; case 'i': return i_glyph;
-        case 'k': return k_glyph; case 'l': return l_glyph; case 'm': return m_glyph;
+        case 'j': return j_glyph; case 'k': return k_glyph; case 'l': return l_glyph;
+        case 'm': return m_glyph;
         case 'n': return n_glyph; case 'o': return o_glyph; case 'p': return p_glyph;
-        case 'r': return r_glyph; case 's': return s_glyph; case 't': return t_glyph;
+        case 'q': return q_glyph; case 'r': return r_glyph; case 's': return s_glyph;
+        case 't': return t_glyph;
         case 'u': return u_glyph; case 'v': return v_glyph; case 'w': return w_glyph;
-        case 'x': return x_glyph; case 'y': return y_glyph;
+        case 'x': return x_glyph; case 'y': return y_glyph; case 'z': return z_glyph;
         case '0': return zero_glyph;  case '1': return one_glyph;
         case '2': return two_glyph;   case '3': return three_glyph;
         case '4': return four_glyph;  case '5': return five_glyph;
@@ -202,7 +208,7 @@ typedef struct {
 } ItemDef;
 
 //defining the items
-#define ITEM_COUNT 16
+#define ITEM_COUNT 22
 static const ItemDef item_defs[ITEM_COUNT] = {
     {NULL,                            BLOCK_AIR,         0},
     {"src/textures/cobblestone.png",  BLOCK_COBBLESTONE, 0},
@@ -220,6 +226,12 @@ static const ItemDef item_defs[ITEM_COUNT] = {
     {"src/textures/obsidian.png", BLOCK_OBSIDIAN, 0},
     {"src/textures/gravel.png", BLOCK_GRAVEL, 0},
     {"src/textures/grass_path_side.png", BLOCK_GRASS_PATH, 0},
+    {"src/textures/end_stone.png", BLOCK_ENDSTONE, 0},
+    {"src/textures/end_stone_bricks.png", BLOCK_ENDSTONE_BRICKS, 0},
+    {"src/textures/purple_stained_glass.png", BLOCK_PURPLE_STAINED_GLASS, 0},
+    {"src/textures/blue_stained_glass.png", BLOCK_BLUE_STAINED_GLASS, 0},
+    {"src/textures/green_stained_glass.png", BLOCK_GREEN_STAINED_GLASS, 0},
+    {"src/textures/red_stained_glass.png", BLOCK_RED_STAINED_GLASS, 0},
 };
 
 #define INV_SIZE 36
@@ -295,14 +307,26 @@ static void load_inventory(const char* path, int* inv) {
     fclose(f);
 }
 
-static void save_inventory(const char* path, const int* inv) {
+static int save_inventory(const char* path, const int* inv) {
     FILE* f = fopen(path, "wb");
-    if (!f) return;
+    if (!f) return 0;
     uint8_t buf[INV_SIZE];
     for (int i = 0; i < INV_SIZE; i++)
         buf[i] = (uint8_t)inv[i];
-    fwrite(buf, 1, INV_SIZE, f);
-    fclose(f);
+    size_t written = fwrite(buf, 1, INV_SIZE, f);
+    int closed = fclose(f) == 0;
+    return written == INV_SIZE && closed;
+}
+
+static int save_player_position(const char* path, const Camera* cam) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return 0;
+    size_t written = 0;
+    written += fwrite(&cam->position[0], sizeof(float), 1, f);
+    written += fwrite(&cam->position[1], sizeof(float), 1, f);
+    written += fwrite(&cam->position[2], sizeof(float), 1, f);
+    int closed = fclose(f) == 0;
+    return written == 3 && closed;
 }
 
 typedef struct {
@@ -416,6 +440,21 @@ static void save_settings(const char* path, const Settings* settings) {
     if (!f) return;
     fprintf(f, "%d %.3f %d %d %d %.2f %d\n", settings->fps_cap, settings->render_distance_chunks, settings->gravity_enabled ? 1 : 0, settings->soft_lighting ? 1 : 0, settings->day_night_cycle ? 1 : 0, settings->day_time, settings->anti_aliasing ? 1 : 0);
     fclose(f);
+}
+
+static void load_world_time(const char* path, float* day_time) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return;
+    fread(day_time, sizeof(*day_time), 1, f);
+    fclose(f);
+}
+
+static int save_world_time(const char* path, float day_time) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return 0;
+    size_t written = fwrite(&day_time, sizeof(day_time), 1, f);
+    int closed = fclose(f) == 0;
+    return written == 1 && closed;
 }
 
 static int player_collides_at_h(World* world, vec3 position, float ph) {
@@ -787,9 +826,10 @@ menu_start:
     if (!world) { SDL_Quit(); return 1; }
     world_init(world, 0, 0, menu_result.world_dir, menu_result.seed, menu_result.natural);
 
-    char player_path[320], inventory_path[320];
+    char player_path[320], inventory_path[320], world_time_path[320];
     snprintf(player_path, sizeof(player_path), "%s/player.bin", menu_result.world_dir);
     snprintf(inventory_path, sizeof(inventory_path), "%s/inventory.bin", menu_result.world_dir);
+    snprintf(world_time_path, sizeof(world_time_path), "%s/time.bin", menu_result.world_dir);
 
     Mesh sand_cube_mesh = chunk_mesh_build_block(BLOCK_SAND);
     Mesh gravel_cube_mesh = chunk_mesh_build_block(BLOCK_GRAVEL);
@@ -814,8 +854,14 @@ menu_start:
         "src/textures/gravel.png",
         "src/textures/grass_path_side.png",
         "src/textures/grass_path_top.png",
+        "src/textures/end_stone.png",
+        "src/textures/end_stone_bricks.png",
+        "src/textures/purple_stained_glass.png",
+        "src/textures/blue_stained_glass.png",
+        "src/textures/green_stained_glass.png",
+        "src/textures/red_stained_glass.png",
     };
-    GLuint texture = load_texture_array(world_textures, 18);
+    GLuint texture = load_texture_array(world_textures, 24);
 
     int buttonW, buttonH, buttonCh;
     unsigned char* buttonBytes = stbi_load("src/UI/button.png", &buttonW, &buttonH, &buttonCh, 4);
@@ -858,7 +904,9 @@ menu_start:
         glBindTexture(GL_TEXTURE_2D, 0);
     }
     int inventory[INV_SIZE] = {0};
-    for (int i = 1; i < ITEM_COUNT; i++) inventory[INV_HOTBAR_START + i - 1] = i;
+    int hotbar_items = ITEM_COUNT - 1;
+    if (hotbar_items > INV_SIZE - INV_HOTBAR_START) hotbar_items = INV_SIZE - INV_HOTBAR_START;
+    for (int i = 1; i <= hotbar_items; i++) inventory[INV_HOTBAR_START + i - 1] = i;
     load_inventory(inventory_path, inventory);
     for (int i = 1; i < ITEM_COUNT; i++) {
         int present = 0;
@@ -917,6 +965,9 @@ menu_start:
     float place_timer=0.0f;
     int show_fps=0, fps_count=0, fps_display=0;
     float fps_timer=0.0f;
+    float autosave_timer=0.0f;
+    float save_status_timer=0.0f;
+    int save_status=0;
     int fps_cap = 120;                          //standard setting at start
     float render_distance_chunks = 6.0f;        //standard setting at start
     float reach_distance = 7.5f;                //standard setting at start
@@ -944,9 +995,10 @@ menu_start:
     gravity_enabled = settings.gravity_enabled;
     soft_lighting = settings.soft_lighting;
     day_night_cycle = settings.day_night_cycle;
-    day_time = settings.day_time;
     anti_aliasing = settings.anti_aliasing;
+    load_world_time(world_time_path, &day_time);
     if (!(day_time >= 0.0f && day_time < DAY_LENGTH_SECONDS)) day_time = DAY_LENGTH_SECONDS * 0.25f;
+    world_set_stream_radius(world, (int)ceilf(render_distance_chunks) + 1);
     chunk_mesh_set_soft_lighting(soft_lighting);
     chunk_mesh_set_directional_lighting(1);
     int last_shadow_bucket;
@@ -1050,6 +1102,7 @@ menu_start:
                         fps_next_deadline_seconds = (double)SDL_GetPerformanceCounter() / (double)fps_perf_freq;
                     } else {
                         render_distance_chunks = 4.0f + t * 28.0f;
+                        world_set_stream_radius(world, (int)ceilf(render_distance_chunks) + 1);
                     }
                 }
             } else if (paused && event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
@@ -1137,7 +1190,7 @@ menu_start:
         {
             Uint64 rb_start = SDL_GetPerformanceCounter();
             int rebuilt = 0;
-            for (int ring = 0; ring <= WORLD_RADIUS; ring++) {
+            for (int ring = 0; ring <= world->stream_radius; ring++) {
                 for (int rdx = -ring; rdx <= ring; rdx++) {
                     for (int rdz = -ring; rdz <= ring; rdz++) {
                         if (abs(rdx) != ring && abs(rdz) != ring) continue;
@@ -1160,6 +1213,10 @@ menu_start:
         float dt = (float)(now - last_time) * 0.001f;
         if (dt > 0.1f) dt = 0.1f;
         last_time = now;
+        if (save_status_timer > 0.0f) {
+            save_status_timer -= dt;
+            if (save_status_timer < 0.0f) save_status_timer = 0.0f;
+        }
 
         if (day_night_cycle && !paused) {
             day_time += dt;
@@ -1461,6 +1518,9 @@ menu_start:
             }
 
             glUseProgram(cutoutProgram);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glDepthMask(GL_TRUE);
             for (int i = 0; i < WORLD_SLOTS; i++) {
                 WorldSlot* s = &world->slots[i];
                 if (!s->loaded || !s->mesh_valid) continue;
@@ -1475,6 +1535,7 @@ menu_start:
                 glUniformMatrix4fv(u_cut_model, 1, GL_FALSE, (float*)chunk_model);
                 mesh_draw(&s->cutout_mesh);
             }
+            glDisable(GL_BLEND);
             glUseProgram(shaderProgram);
 
             glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1559,12 +1620,37 @@ menu_start:
                 glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
                 glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
                 glUseProgram(uiProgram); glBindVertexArray(uiVAO); glBindBuffer(GL_ARRAY_BUFFER,uiVBO);
+                int coord_x = (int)floorf(cam.position[0]) - spawn_wx;
+                int coord_y = (int)floorf(cam.position[1]);
+                int coord_z = (int)floorf(cam.position[2]) - spawn_wz;
+                char coord_str[64];
+                char save_str[64];
+                snprintf(coord_str, sizeof(coord_str), "x: %d y: %d z: %d", coord_x, coord_y, coord_z);
+                if (save_status_timer > 0.0f) {
+                    snprintf(save_str, sizeof(save_str), "%s", save_status == 1 ? "saved" : "saving failed");
+                } else {
+                    int seconds = (int)ceilf(60.0f - autosave_timer);
+                    if (seconds < 0) seconds = 0;
+                    snprintf(save_str, sizeof(save_str), "saving in: %d seconds", seconds);
+                }
+                float f3_vertices[8192];
+                int f3_count = 0;
+                build_text_vertices(coord_str, 8.0f, 8.0f, 1.8f, f3_vertices, &f3_count);
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * f3_count, f3_vertices);
+                glUniform2f(u_ui_screenSize,(float)screen_w,(float)screen_h);
+                glUniform4f(u_ui_color,1,1,1,1);
+                glDrawArrays(GL_TRIANGLES,0,f3_count/2);
+                f3_count = 0;
+                build_text_vertices(save_str, 8.0f, 24.0f, 1.8f, f3_vertices, &f3_count);
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * f3_count, f3_vertices);
+                glUniform4f(u_ui_color,1,1,1,0.8f);
+                glDrawArrays(GL_TRIANGLES,0,f3_count/2);
                 char fps_str[16]; int n=fps_display, pos=0;
                 if(n==0){fps_str[pos++]='0';}
                 else{char tmp[8];int tl=0;while(n>0){tmp[tl++]=(char)('0'+n%10);n/=10;}for(int fi=tl-1;fi>=0;fi--)fps_str[pos++]=tmp[fi];}
                 fps_str[pos++]=' ';fps_str[pos++]='f';fps_str[pos++]='p';fps_str[pos++]='s';fps_str[pos]=0;
                 float ftverts[4096]; int ftc=0;
-                build_text_vertices(fps_str,8,8,2.5f,ftverts,&ftc);
+                build_text_vertices(fps_str,8,40,1.8f,ftverts,&ftc);
                 glBufferSubData(GL_ARRAY_BUFFER,0,sizeof(float)*ftc,ftverts);
                 glUniform2f(u_ui_screenSize,(float)screen_w,(float)screen_h);
                 glUniform4f(u_ui_color,1,1,1,1);
@@ -1922,20 +2008,23 @@ menu_start:
             }
         }
 
+        autosave_timer += dt;
+        if (autosave_timer >= 60.0f) {
+            autosave_timer -= 60.0f;
+            int save_ok = save_player_position(player_path, &cam);
+            save_ok = save_inventory(inventory_path, inventory) && save_ok;
+            save_ok = save_world_time(world_time_path, day_time) && save_ok;
+            save_ok = world_save_all_dirty(world) && save_ok;
+            save_status = save_ok ? 1 : 2;
+            save_status_timer = 2.0f;
+        }
+
         SDL_GL_SwapWindow(window);
         fps_next_deadline_seconds += 1.0 / (double)fps_cap;
         fps_frame_start_counter = SDL_GetPerformanceCounter();
     }
 
-    {
-        FILE* pf=fopen(player_path,"wb");
-        if(pf){
-            fwrite(&cam.position[0],sizeof(float),1,pf);
-            fwrite(&cam.position[1],sizeof(float),1,pf);
-            fwrite(&cam.position[2],sizeof(float),1,pf);
-            fclose(pf);
-        }
-    }
+    save_player_position(player_path, &cam);
 
     settings.fps_cap = fps_cap;
     settings.render_distance_chunks = render_distance_chunks;
@@ -1947,6 +2036,7 @@ menu_start:
     save_settings("Savefiles/settings.cfg", &settings);
     inventory_put_back(inventory, &drag_item, &drag_from);
     save_inventory(inventory_path, inventory);
+    save_world_time(world_time_path, day_time);
 
     world_save_all_dirty(world);
     world_free(world);

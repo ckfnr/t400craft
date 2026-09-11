@@ -39,6 +39,7 @@ typedef struct {
     WorldSlot slots[WORLD_SLOTS];
     int center_cx;
     int center_cz;
+    int stream_radius;
     char save_dir[256];
     uint32_t gen_seed;
     int gen_natural;
@@ -64,6 +65,7 @@ void world_init(World* world, int center_cx, int center_cz, const char* save_dir
 void world_free(World* world);
 
 void world_update_center(World* world, int new_cx, int new_cz);
+void world_set_stream_radius(World* world, int radius);
 void world_stream_missing(World* world, int budget);
 
 WorldSlot* world_get_slot(World* world, int cx, int cz);
@@ -79,7 +81,7 @@ void world_schedule_gravity(World* world, int wx, int wy, int wz);
 void world_update_gravity(World* world, float dt);
 
 void world_rebuild_mesh(World* world, int cx, int cz);
-void world_save_chunk(World* world, int cx, int cz);
-void world_save_all_dirty(World* world);
+int  world_save_chunk(World* world, int cx, int cz);
+int  world_save_all_dirty(World* world);
 
 #endif

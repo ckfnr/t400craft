@@ -37,6 +37,12 @@ static int block_face_texture_layer(BlockType type, int face) {
             if (face == 0) return 17;
             if (face == 1) return 0;
             return 16;
+        case BLOCK_ENDSTONE:             return 18;
+        case BLOCK_ENDSTONE_BRICKS:      return 19;
+        case BLOCK_PURPLE_STAINED_GLASS: return 20;
+        case BLOCK_BLUE_STAINED_GLASS:   return 21;
+        case BLOCK_GREEN_STAINED_GLASS:  return 22;
+        case BLOCK_RED_STAINED_GLASS:    return 23;
         default:                return 0;
     }
 }
@@ -50,6 +56,7 @@ static uint8_t light_solid(BlockType type) {
 #define EXT_X (CHUNK_SIZE_X + 2)
 #define EXT_Z (CHUNK_SIZE_Z + 2)
 #define EXT_QCAP (EXT_X * CHUNK_SIZE_Y * EXT_Z + 1)
+#define LOCAL_QCAP (CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z + 1)
 
 static uint8_t ext_light[EXT_X][CHUNK_SIZE_Y][EXT_Z];
 static uint8_t ext_solid[EXT_X][CHUNK_SIZE_Y][EXT_Z];
@@ -59,22 +66,28 @@ static LightNode ext_queue[EXT_QCAP];
 void chunk_compute_lightmap(Chunk* chunk,
                              uint8_t light[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z]) {
     memset(light, 0, CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z);
-    static LightNode local_queue[CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z * 2];
+    static LightNode local_queue[LOCAL_QCAP];
+    static uint8_t local_in_queue[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
     int head = 0, tail = 0;
+    memset(local_in_queue, 0, sizeof(local_in_queue));
     for (int x = 0; x < CHUNK_SIZE_X; x++) {
         for (int z = 0; z < CHUNK_SIZE_Z; z++) {
             for (int y = CHUNK_SIZE_Y - 1; y >= 0; y--) {
                 if (block_stops_skylight(chunk->blocks[x][y][z].type)) break;
                 light[x][y][z] = MAX_LIGHT;
-                local_queue[tail++] = (LightNode){(short)x, (short)y, (short)z};
+                local_queue[tail] = (LightNode){(short)x, (short)y, (short)z};
+                tail = (tail + 1) % LOCAL_QCAP;
+                local_in_queue[x][y][z] = 1;
             }
         }
     }
     static const int dx[] = {1,-1, 0, 0, 0, 0};
     static const int dy[] = {0, 0, 1,-1, 0, 0};
     static const int dz[] = {0, 0, 0, 0, 1,-1};
-    while (head < tail) {
+    while (head != tail) {
         LightNode n = local_queue[head++];
+        head %= LOCAL_QCAP;
+        local_in_queue[n.x][n.y][n.z] = 0;
         int lv = light[n.x][n.y][n.z];
         if (lv <= 1) continue;
         for (int d = 0; d < 6; d++) {
@@ -85,7 +98,11 @@ void chunk_compute_lightmap(Chunk* chunk,
             if (light_solid(chunk->blocks[nx][ny][nz].type)) continue;
             if (light[nx][ny][nz] >= lv - 1) continue;
             light[nx][ny][nz] = (uint8_t)(lv - 1);
-            local_queue[tail++] = (LightNode){(short)nx, (short)ny, (short)nz};
+            if (!local_in_queue[nx][ny][nz]) {
+                local_queue[tail] = (LightNode){(short)nx, (short)ny, (short)nz};
+                tail = (tail + 1) % LOCAL_QCAP;
+                local_in_queue[nx][ny][nz] = 1;
+            }
         }
     }
 }
@@ -304,7 +321,7 @@ static Block* mesh_cell(Chunk* chunk, Chunk* neighbors[4], int nx, int ny, int n
 
 static int mesh_cell_opaque(Chunk* chunk, Chunk* neighbors[4], int nx, int ny, int nz) {
     Block* b = mesh_cell(chunk, neighbors, nx, ny, nz);
-    return b && block_opaque(b->type) && b->type != BLOCK_GLASS;
+    return b && block_opaque(b->type) && !block_transparent(b->type);
 }
 
 static int soft_lighting_enabled = 1;
@@ -395,7 +412,7 @@ static float canopy_shadow_factor(Chunk* chunk, Chunk* neighbors[4], int x, int 
             for (int dz = -1; dz <= 1; dz++) {
                 Block* b = mesh_cell(chunk, neighbors, x + ox + dx, y + dy, z + oz + dz);
                 if (!b || !block_opaque(b->type)) continue;
-                float footprint = b->type == BLOCK_GLASS ? 0.1f : 1.0f;
+                float footprint = block_is_glass(b->type) ? 0.1f : 1.0f;
                 if (dx != 0) footprint *= 0.65f;
                 if (dz != 0) footprint *= 0.65f;
                 occlusion += height_weight * footprint;
@@ -491,7 +508,7 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
                         if (have_n && ntype != BLOCK_AIR && !block_transparent(ntype)) continue;
                     } else {
                         if (have_n && block_full_cube(ntype) && !block_transparent(ntype)) continue;
-                        if (have_n && type == BLOCK_GLASS && ntype == BLOCK_GLASS) continue;
+                        if (have_n && block_is_glass(type) && block_is_glass(ntype)) continue;
                         if (have_n && type == BLOCK_OAK_LEAVES && ntype == BLOCK_OAK_LEAVES) continue;
                     }
                     float lv;
@@ -513,7 +530,7 @@ static void build_mesh(Chunk* chunk, Chunk* neighbors[4],
                     float shades[4];
                     face_shadow_corners(chunk, neighbors, x, y, z, face, shades);
                     float canopy = 1.0f;
-                    if (face == 0)
+                    if (face == 0 && type != BLOCK_OAK_LEAVES && !block_transparent(type))
                         canopy = canopy_shadow_factor(chunk, neighbors, x, y, z);
                     float corner_b[4];
                     if (soft_lighting_enabled && dynamic) {
