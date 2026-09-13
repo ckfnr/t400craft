@@ -31,7 +31,7 @@ void main()
     float shade = max(light_ambient + light_diffuse * max(dot(nrm, light_dir), 0.0), 0.28);
     shade = clamp(shade, 0.0, 1.0);
     float fog_t = clamp((fog_depth - fog_start) / (fog_end - fog_start), 0.0, 1.0);
-    vec3 base_color = tex.a < 0.5 ? glass_color : tex.rgb;
-    float alpha = pane_glass ? (tex.a < 0.5 ? (stained_glass ? 0.39 : 0.18) : (stained_glass ? 0.66 : 0.18)) : 1.0;
+    vec3 base_color = stained_glass && tex.a < 0.5 ? glass_color : tex.rgb;
+    float alpha = pane_glass ? (stained_glass ? (tex.a < 0.5 ? 0.39 : 0.66) : tex.a) : 1.0;
     gl_FragColor = vec4(mix(base_color * shade, fog_color, fog_t), alpha);
 }

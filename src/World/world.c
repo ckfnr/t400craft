@@ -1,5 +1,6 @@
 #include "world.h"
 #include "chunk_mesh.h"
+#include "items.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +9,11 @@
 
 #define WORLD_WATER_UPDATE_BUDGET 384
 #define WORLD_GRAVITY_QUEUE_BUDGET 256
+#define DROPPED_ITEM_LIFETIME 300.0f
+
+static void dropped_items_path(World* world, char* path, size_t path_size) {
+    snprintf(path, path_size, "%s/dropped_items.bin", world->save_dir);
+}
 
 static void slot_index(int cx, int cz, int center_cx, int center_cz, int radius, int* out_idx) {
     if (cx < center_cx - radius || cx > center_cx + radius ||
@@ -146,6 +152,24 @@ void world_init(World* world, int center_cx, int center_cz, const char* save_dir
 
     mkdir(save_dir, 0755);
 
+    char dropped_path[512];
+    dropped_items_path(world, dropped_path, sizeof(dropped_path));
+    FILE* dropped_file = fopen(dropped_path, "rb");
+    if (dropped_file) {
+        uint32_t saved_count = 0;
+        if (fread(&saved_count, sizeof(saved_count), 1, dropped_file) == 1 && saved_count > 0) {
+            world->dropped = malloc((size_t)saved_count * sizeof(*world->dropped));
+            if (world->dropped && fread(world->dropped, sizeof(*world->dropped), saved_count, dropped_file) == saved_count) {
+                world->dropped_count = (int)saved_count;
+                world->dropped_cap = (int)saved_count;
+            } else {
+                free(world->dropped);
+                world->dropped = NULL;
+            }
+        }
+        fclose(dropped_file);
+    }
+
     const int initial_radius = 2;
     for (int cz = center_cz - initial_radius; cz <= center_cz + initial_radius; cz++) {
         for (int cx = center_cx - initial_radius; cx <= center_cx + initial_radius; cx++) {
@@ -179,6 +203,73 @@ void world_free(World* world) {
     world->falling = NULL;
     world->falling_count = 0;
     world->falling_cap = 0;
+    free(world->dropped);
+    world->dropped = NULL;
+    world->dropped_count = 0;
+    world->dropped_cap = 0;
+}
+
+void world_drop_item(World* world, int item, int count, float x, float y, float z,
+                     float direction_x, float direction_z) {
+    if (item <= 0 || item >= ITEM_COUNT || count <= 0) return;
+    if (world->dropped_count == world->dropped_cap) {
+        int next_cap = world->dropped_cap ? world->dropped_cap * 2 : 64;
+        DroppedItem* next = realloc(world->dropped, (size_t)next_cap * sizeof(*next));
+        if (!next) return;
+        world->dropped = next;
+        world->dropped_cap = next_cap;
+    }
+    DroppedItem* drop = &world->dropped[world->dropped_count++];
+    float len = sqrtf(direction_x * direction_x + direction_z * direction_z);
+    if (len < 0.001f) { direction_x = 0.0f; direction_z = 1.0f; len = 1.0f; }
+    drop->item = item;
+    drop->count = count;
+    drop->x = x; drop->y = y; drop->z = z;
+    drop->vx = direction_x / len * 1.5f;
+    drop->vy = 3.0f;
+    drop->vz = direction_z / len * 1.5f;
+    drop->yaw = atan2f(direction_x, direction_z);
+    drop->age = 0.0f;
+    drop->pickup_delay = 1.5f;
+}
+
+void world_update_dropped_items(World* world, float dt) {
+    for (int i = 0; i < world->dropped_count; ) {
+        DroppedItem* drop = &world->dropped[i];
+        drop->age += dt;
+        if (drop->pickup_delay > 0.0f) drop->pickup_delay -= dt;
+        if (drop->age >= DROPPED_ITEM_LIFETIME) {
+            world->dropped[i] = world->dropped[--world->dropped_count];
+            continue;
+        }
+        drop->vy -= 12.0f * dt;
+        drop->x += drop->vx * dt;
+        drop->y += drop->vy * dt;
+        drop->z += drop->vz * dt;
+        Block* below = world_get_block(world, (int)floorf(drop->x),
+            (int)floorf(drop->y - 0.15f), (int)floorf(drop->z));
+        if (below && block_opaque(below->type) && drop->vy < 0.0f) {
+            drop->y = floorf(drop->y - 0.15f) + 1.15f;
+            drop->vy = 0.0f;
+            drop->vx *= 0.82f;
+            drop->vz *= 0.82f;
+        }
+        i++;
+    }
+}
+
+int world_save_dropped_items(World* world) {
+    char path[512];
+    dropped_items_path(world, path, sizeof(path));
+    FILE* f = fopen(path, "wb");
+    if (!f) return 0;
+    uint32_t count = (uint32_t)world->dropped_count;
+    size_t written = fwrite(&count, sizeof(count), 1, f);
+    int items_written = 1;
+    if (written == 1 && count > 0)
+        items_written = fwrite(world->dropped, sizeof(*world->dropped), count, f) == count;
+    int closed = fclose(f) == 0;
+    return written == 1 && items_written && closed;
 }
 
 int world_save_chunk(World* world, int cx, int cz) {
@@ -188,7 +279,7 @@ int world_save_chunk(World* world, int cx, int cz) {
 }
 
 int world_save_all_dirty(World* world) {
-    int success = 1;
+    int success = world_save_dropped_items(world);
     for (int i = 0; i < WORLD_SLOTS; i++) {
         if (world->slots[i].loaded && world->slots[i].chunk.dirty)
             if (!world_save_chunk(world, world->slots[i].chunk.cx, world->slots[i].chunk.cz)) success = 0;

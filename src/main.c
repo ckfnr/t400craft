@@ -16,6 +16,7 @@
 #include <SDL2/SDL.h>
 #include <GL/glew.h>
 #include <float.h>
+#include <limits.h>
 #include <math.h>
 #include "Shaders/shader_loader.h"
 #include "Mesh/mesh.h"
@@ -23,6 +24,7 @@
 #include "include/cglm/include/cglm/cglm.h"
 #include "Camera/Camera.h"
 #include "World/block.h"
+#include "World/items.h"
 #include "World/chunk.h"
 #include "World/world.h"
 #include "World/chunk_mesh.h"
@@ -30,6 +32,9 @@
 
 const unsigned int width = 800;
 const unsigned int height = 800;
+
+/* Future survival-mode switch: creative block breaking must not drop items. */
+#define SURVIVAL_MODE 0
 
 static int g_wayland_video_driver = 0;
 static int g_use_relative_mouse = 1;
@@ -195,62 +200,87 @@ static void build_text_vertices(const char* text, float x, float y, float scale,
     }
 }
 
+static void draw_stack_count(GLuint ui_program, GLuint ui_vao, GLuint ui_vbo,
+                             GLint screen_uniform, GLint color_uniform,
+                             int screen_w, int screen_h,
+                             float x, float y, float size, int count) {
+    if (count <= 0) return;
+    char text[12];
+    snprintf(text, sizeof(text), "%d", count);
+    float scale = size * 0.16f;
+    if (scale < 1.5f) scale = 1.5f;
+    if (scale > 3.0f) scale = 3.0f;
+    float vertices[512];
+    int vertex_count = 0;
+    float text_width = 0.0f;
+    for (const char* c = text; *c; c++) text_width += (*c == ' ') ? 4.0f * scale : 6.0f * scale;
+    float text_x = x + size - text_width - 3.0f;
+    float text_y = y + size - 7.0f * scale - 2.0f;
+
+    glUseProgram(ui_program);
+    glBindVertexArray(ui_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, ui_vbo);
+    build_text_vertices(text, text_x + 1.5f, text_y + 1.5f, scale, vertices, &vertex_count);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * vertex_count, vertices);
+    glUniform2f(screen_uniform, (float)screen_w, (float)screen_h);
+    glUniform4f(color_uniform, 0.0f, 0.0f, 0.0f, 0.9f);
+    glDrawArrays(GL_TRIANGLES, 0, vertex_count / 2);
+    vertex_count = 0;
+    build_text_vertices(text, text_x, text_y, scale, vertices, &vertex_count);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * vertex_count, vertices);
+    glUniform4f(color_uniform, 1.0f, 1.0f, 1.0f, 1.0f);
+    glDrawArrays(GL_TRIANGLES, 0, vertex_count / 2);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+}
+
 static int point_in_rect(int px, int py, float x, float y, float rw, float rh) {
     return px >= (int)x && px <= (int)(x + rw) && py >= (int)y && py <= (int)(y + rh);
 }
 
 static int block_is_solid(BlockType type) { return block_opaque(type); }
 
-typedef struct {
-    const char* tex_path;
-    BlockType block;
-    int is_bucket;
-} ItemDef;
-
-//defining the items
-#define ITEM_COUNT 22
-static const ItemDef item_defs[ITEM_COUNT] = {
-    {NULL,                            BLOCK_AIR,         0},
-    {"src/textures/cobblestone.png",  BLOCK_COBBLESTONE, 0},
-    {"src/textures/oak_planks.png",   BLOCK_OAK_PLANKS,  0},
-    {"src/textures/grass_side.png",   BLOCK_GRASS,       0},
-    {"src/textures/dirtblock.png",    BLOCK_DIRT,        0},
-    {"src/textures/water_bucket.png", BLOCK_AIR,         1},
-    {"src/textures/oaklog_side.png",  BLOCK_OAK_LOG,     0},
-    {"src/textures/oak_leaves.png",   BLOCK_OAK_LEAVES,  0},
-    {"src/textures/glass_block.png",  BLOCK_GLASS,       0},
-    {"src/textures/stone.png",      BLOCK_NATURAL_STONE, 0},
-    {"src/textures/stone_bricks.png", BLOCK_STONE_BRICKS, 0},
-    {"src/textures/smooth_stone.png", BLOCK_SMOOTH_STONE, 0},
-    {"src/textures/sand.png",         BLOCK_SAND,        0},
-    {"src/textures/obsidian.png", BLOCK_OBSIDIAN, 0},
-    {"src/textures/gravel.png", BLOCK_GRAVEL, 0},
-    {"src/textures/grass_path_side.png", BLOCK_GRASS_PATH, 0},
-    {"src/textures/end_stone.png", BLOCK_ENDSTONE, 0},
-    {"src/textures/end_stone_bricks.png", BLOCK_ENDSTONE_BRICKS, 0},
-    {"src/textures/purple_stained_glass.png", BLOCK_PURPLE_STAINED_GLASS, 0},
-    {"src/textures/blue_stained_glass.png", BLOCK_BLUE_STAINED_GLASS, 0},
-    {"src/textures/green_stained_glass.png", BLOCK_GREEN_STAINED_GLASS, 0},
-    {"src/textures/red_stained_glass.png", BLOCK_RED_STAINED_GLASS, 0},
-};
-
 #define INV_SIZE 36
 #define INV_MAIN_COUNT 27
 #define INV_HOTBAR_START 27
 
-typedef struct { float x, y, cell, pad, gap; } InvLayout;
+typedef struct {
+    float x, y, cell, pad, gap;
+    float craft_x, craft_y, output_x, output_y;
+    float palette_x, palette_y;
+    int palette_visible_rows;
+} InvLayout;
+
+static int palette_scroll = 0;
 
 static void inventory_layout(int screen_w, int screen_h, InvLayout* L) {
-    float cell = (float)screen_h * 0.07f;
-    if (cell < 20.0f) cell = 20.0f;
-    if (cell > 64.0f) cell = 64.0f;
+    float cell = (float)screen_h * 0.055f;
+    if (cell < 30.0f) cell = 30.0f;
+    if (cell > 52.0f) cell = 52.0f;
     L->cell = cell;
     L->pad = cell * 0.1f;
     L->gap = cell * 0.6f;
     float grid_w = 9.0f * cell + 8.0f * L->pad;
     float grid_h = 4.0f * cell + 3.0f * L->pad + L->gap;
+    float step = cell + L->pad;
+    float craft_h = 2.0f * cell + 1.0f * L->pad;
+    float total_h = craft_h + cell * 0.8f + grid_h;
     L->x = ((float)screen_w - grid_w) * 0.5f;
-    L->y = ((float)screen_h - grid_h) * 0.5f;
+    L->y = ((float)screen_h - total_h) * 0.5f + craft_h + cell * 0.8f;
+    L->craft_x = L->x;
+    L->craft_y = L->y - cell * 0.8f - craft_h;
+    L->output_x = L->craft_x + 2.0f * step + 1.0f * step;
+    L->output_y = L->craft_y + 0.5f * step;
+    L->palette_x = L->craft_x - 2.0f * step - 2.5f * step;
+    L->palette_y = L->craft_y;
+    float hotbar_bottom = L->y + 3.0f * step + L->gap + cell;
+    L->palette_visible_rows = (int)floorf((hotbar_bottom - L->palette_y) / step);
+    if (L->palette_visible_rows < 1) L->palette_visible_rows = 1;
+    int palette_rows = (ITEM_COUNT - 2) / 2 + 1;
+    int max_scroll = palette_rows - L->palette_visible_rows;
+    if (max_scroll < 0) max_scroll = 0;
+    if (palette_scroll > max_scroll) palette_scroll = max_scroll;
+    if (palette_scroll < 0) palette_scroll = 0;
 }
 
 static void inventory_slot_rect(const InvLayout* L, int slot, float* rx, float* ry) {
@@ -272,59 +302,337 @@ static int inventory_slot_at(const InvLayout* L, float mx, float my) {
     return -1;
 }
 
-static void inventory_shift_click(int* inv, int slot) {
-    if (inv[slot] == 0) return;
-    int start = slot < INV_MAIN_COUNT ? INV_HOTBAR_START : 0;
-    int end   = slot < INV_MAIN_COUNT ? INV_SIZE : INV_MAIN_COUNT;
-    for (int i = start; i < end; i++)
-        if (inv[i] == 0) {
-            inv[i] = inv[slot];
-            inv[slot] = 0;
-            return;
-        }
+static int inventory_add(int* inv, int* counts, int item, int amount);
+
+static void crafting_slot_rect(const InvLayout* L, int slot, float* rx, float* ry) {
+    *rx = L->craft_x + (float)(slot % CRAFTING_GRID_WIDTH) * (L->cell + L->pad);
+    *ry = L->craft_y + (float)(slot / CRAFTING_GRID_WIDTH) * (L->cell + L->pad);
 }
 
-static void inventory_put_back(int* inv, int* drag_item, int* drag_from) {
-    if (*drag_item) {
-        if (*drag_from >= 0 && inv[*drag_from] == 0) {
-            inv[*drag_from] = *drag_item;
-        } else {
-            for (int i = 0; i < INV_SIZE; i++)
-                if (inv[i] == 0) { inv[i] = *drag_item; break; }
+static int crafting_slot_at(const InvLayout* L, float mx, float my) {
+    for (int i = 0; i < CRAFTING_GRID_SIZE; i++) {
+        float rx, ry;
+        crafting_slot_rect(L, i, &rx, &ry);
+        if (mx >= rx && mx <= rx + L->cell && my >= ry && my <= ry + L->cell) return i;
+    }
+    return -1;
+}
+
+static int crafting_result_at(const InvLayout* L, float mx, float my) {
+    return mx >= L->output_x && mx <= L->output_x + L->cell &&
+           my >= L->output_y && my <= L->output_y + L->cell;
+}
+
+static void craft_one(int* crafting_items, int* crafting_counts,
+                      int* inventory, int* inventory_counts) {
+    int recipe_index = item_find_recipe(crafting_items, crafting_counts, CRAFTING_GRID_SIZE);
+    if (recipe_index < 0) return;
+    const Recipe* recipe = &item_recipes[recipe_index];
+    if (inventory_add(inventory, inventory_counts, recipe->result_item, recipe->result_count) != 0)
+        return;
+    for (int i = 0; i < CRAFTING_GRID_SIZE; i++) {
+        if (crafting_items[i] == 0) continue;
+        int consume = 0;
+        for (int j = 0; j < CRAFTING_GRID_SIZE; j++)
+            if (recipe->ingredients[j].item == crafting_items[i]) consume += recipe->ingredients[j].count;
+        crafting_counts[i] -= consume;
+        if (crafting_counts[i] <= 0) {
+            crafting_items[i] = 0;
+            crafting_counts[i] = 0;
         }
     }
-    *drag_item = 0;
-    *drag_from = -1;
 }
 
-static void load_inventory(const char* path, int* inv) {
+static void creative_palette_rect(const InvLayout* L, int item, float* rx, float* ry) {
+    int column = (item - 1) % 2;
+    int row = (item - 1) / 2 - palette_scroll;
+    *rx = L->palette_x + column * (L->cell + L->pad);
+    *ry = L->palette_y + row * (L->cell + L->pad);
+}
+
+static int creative_palette_at(const InvLayout* L, float mx, float my) {
+    for (int item = 1; item < ITEM_COUNT; item++) {
+        float rx, ry;
+        creative_palette_rect(L, item, &rx, &ry);
+        float hotbar_bottom = L->y + 3.0f * (L->cell + L->pad) + L->gap + L->cell;
+        if (ry >= L->palette_y && ry + L->cell <= hotbar_bottom &&
+            mx >= rx && mx <= rx + L->cell && my >= ry && my <= ry + L->cell) return item;
+    }
+    return 0;
+}
+
+static void inventory_shift_click(int* inv, int* counts, int slot) {
+    if (inv[slot] == 0) return;
+    int start = slot < INV_MAIN_COUNT ? INV_HOTBAR_START : 0;
+    int end = slot < INV_MAIN_COUNT ? INV_SIZE : INV_MAIN_COUNT;
+    for (int i = start; i < end; i++) {
+        if (inv[i] == 0) {
+            inv[i] = inv[slot]; counts[i] = counts[slot];
+            inv[slot] = 0; counts[slot] = 0;
+            return;
+        }
+    }
+}
+
+static void inventory_put_back(int* inv, int* counts, int* drag_item, int* drag_count, int* drag_from) {
+    if (*drag_item) {
+        if (*drag_from >= 0 && inv[*drag_from] == 0) {
+            inv[*drag_from] = *drag_item; counts[*drag_from] = *drag_count;
+        } else {
+            for (int i = 0; i < INV_SIZE; i++)
+                if (inv[i] == 0) { inv[i] = *drag_item; counts[i] = *drag_count; break; }
+        }
+    }
+    *drag_item = 0; *drag_count = 0; *drag_from = -1;
+}
+
+static void load_inventory(const char* path, int* inv, int* counts) {
     FILE* f = fopen(path, "rb");
     if (!f) return;
-    uint8_t buf[INV_SIZE];
-    if (fread(buf, 1, INV_SIZE, f) == INV_SIZE)
-        for (int i = 0; i < INV_SIZE; i++)
+    uint8_t buf[INV_SIZE * 2];
+    size_t got = fread(buf, 1, sizeof(buf), f);
+    if (got == sizeof(buf)) {
+        for (int i = 0; i < INV_SIZE; i++) {
             inv[i] = buf[i] < ITEM_COUNT ? buf[i] : 0;
+            counts[i] = inv[i] ? (buf[INV_SIZE + i] ? buf[INV_SIZE + i] : 1) : 0;
+        }
+    } else if (got == INV_SIZE) {
+        for (int i = 0; i < INV_SIZE; i++) {
+            inv[i] = buf[i] < ITEM_COUNT ? buf[i] : 0;
+            counts[i] = inv[i] ? item_stack_limit(inv[i]) : 0;
+        }
+    }
     fclose(f);
 }
 
-static int save_inventory(const char* path, const int* inv) {
+static int save_inventory(const char* path, const int* inv, const int* counts) {
     FILE* f = fopen(path, "wb");
     if (!f) return 0;
-    uint8_t buf[INV_SIZE];
-    for (int i = 0; i < INV_SIZE; i++)
-        buf[i] = (uint8_t)inv[i];
-    size_t written = fwrite(buf, 1, INV_SIZE, f);
+    uint8_t buf[INV_SIZE * 2];
+    for (int i = 0; i < INV_SIZE; i++) {
+        buf[i] = (uint8_t)inv[i]; buf[INV_SIZE + i] = (uint8_t)counts[i];
+    }
+    size_t written = fwrite(buf, 1, sizeof(buf), f);
     int closed = fclose(f) == 0;
-    return written == INV_SIZE && closed;
+    return written == sizeof(buf) && closed;
+}
+
+static int inventory_add(int* inv, int* counts, int item, int amount) {
+    if (item <= 0 || amount <= 0) return amount;
+    int limit = item_stack_limit(item);
+    for (int i = 0; i < INV_SIZE && amount > 0; i++)
+        if (inv[i] == item && counts[i] < limit) {
+            int added = amount < limit - counts[i] ? amount : limit - counts[i];
+            counts[i] += added; amount -= added;
+        }
+    for (int i = 0; i < INV_SIZE && amount > 0; i++)
+        if (inv[i] == 0) {
+            int added = amount < limit ? amount : limit;
+            inv[i] = item; counts[i] = added; amount -= added;
+        }
+    return amount;
+}
+
+static int inventory_add_pickup(int* inv, int* counts, int item, int amount) {
+    if (item <= 0 || amount <= 0) return amount;
+    int limit = item_stack_limit(item);
+    for (int i = 0; i < INV_SIZE && amount > 0; i++) {
+        if (inv[i] != item || counts[i] >= limit) continue;
+        int moved = amount < limit - counts[i] ? amount : limit - counts[i];
+        counts[i] += moved;
+        amount -= moved;
+    }
+    for (int i = INV_HOTBAR_START; i < INV_SIZE && amount > 0; i++) {
+        if (inv[i] != 0) continue;
+        int moved = amount < limit ? amount : limit;
+        inv[i] = item;
+        counts[i] = moved;
+        amount -= moved;
+    }
+    for (int i = 0; i < INV_MAIN_COUNT && amount > 0; i++) {
+        if (inv[i] != 0) continue;
+        int moved = amount < limit ? amount : limit;
+        inv[i] = item;
+        counts[i] = moved;
+        amount -= moved;
+    }
+    return amount;
+}
+
+static void return_crafting_to_inventory(int* crafting_items, int* crafting_counts,
+                                         int* inv, int* counts) {
+    for (int i = 0; i < CRAFTING_GRID_SIZE; i++) {
+        if (crafting_items[i] == 0) continue;
+        int remaining = inventory_add(inv, counts, crafting_items[i], crafting_counts[i]);
+        if (remaining == 0) {
+            crafting_items[i] = 0;
+            crafting_counts[i] = 0;
+        } else {
+            crafting_counts[i] = remaining;
+        }
+    }
+}
+
+static void drop_inventory_amount(World* world, Camera* cam, int* inv, int* counts,
+                                  int slot, int amount) {
+    if (slot < 0 || slot >= INV_SIZE || inv[slot] == 0 || counts[slot] <= 0) return;
+    if (amount > counts[slot]) amount = counts[slot];
+    world_drop_item(world, inv[slot], amount,
+                    cam->position[0], cam->position[1] + 0.8f, cam->position[2],
+                    cam->orientation[0], cam->orientation[2]);
+    counts[slot] -= amount;
+    if (counts[slot] <= 0) inv[slot] = 0;
+}
+
+static void finish_drag(World* world, Camera* cam, int* inv, int* counts,
+                        int* crafting_items, int* crafting_counts,
+                        int* drag_item, int* drag_count, int* drag_from) {
+    if (!*drag_item || *drag_count <= 0) {
+        *drag_item = 0;
+        *drag_count = 0;
+        *drag_from = -1;
+        return;
+    }
+    if (*drag_from >= 0 && inv[*drag_from] == 0) {
+        inv[*drag_from] = *drag_item;
+        counts[*drag_from] = *drag_count;
+    } else if (*drag_from <= -2) {
+        int craft_slot = -2 - *drag_from;
+        if (craft_slot >= 0 && craft_slot < CRAFTING_GRID_SIZE && crafting_items[craft_slot] == 0) {
+            crafting_items[craft_slot] = *drag_item;
+            crafting_counts[craft_slot] = *drag_count;
+        } else {
+            int remaining = inventory_add(inv, counts, *drag_item, *drag_count);
+            if (remaining > 0)
+                world_drop_item(world, *drag_item, remaining, cam->position[0], cam->position[1] + 0.8f,
+                                cam->position[2], cam->orientation[0], cam->orientation[2]);
+        }
+    } else {
+        int remaining = inventory_add(inv, counts, *drag_item, *drag_count);
+        if (remaining > 0)
+            world_drop_item(world, *drag_item, remaining, cam->position[0], cam->position[1] + 0.8f,
+                            cam->position[2], cam->orientation[0], cam->orientation[2]);
+    }
+    *drag_item = 0;
+    *drag_count = 0;
+    *drag_from = -1;
+}
+
+static void distribute_drag_at(const InvLayout* layout, float mx, float my,
+                               int* inv, int* counts, int* crafting_items, int* crafting_counts,
+                               int* drag_item, int* drag_count, int* drag_from,
+                               int* seen_inventory, int* seen_crafting) {
+    if (!*drag_item) return;
+    int slot = inventory_slot_at(layout, mx, my);
+    if (slot >= 0 && !seen_inventory[slot]) {
+        if (slot == *drag_from) return;
+        if (inv[slot] != 0 && (inv[slot] != *drag_item || item_get(*drag_item)->is_bucket ||
+                               counts[slot] >= item_stack_limit(*drag_item))) return;
+        seen_inventory[slot] = 1;
+    } else {
+        int craft_slot = crafting_slot_at(layout, mx, my);
+        if (craft_slot < 0 || seen_crafting[craft_slot]) return;
+        if (*drag_from <= -2 && craft_slot == -2 - *drag_from) return;
+        if (crafting_items[craft_slot] != 0 &&
+            (crafting_items[craft_slot] != *drag_item ||
+             crafting_counts[craft_slot] >= item_stack_limit(*drag_item))) return;
+        seen_crafting[craft_slot] = 1;
+    }
+
+    int total = *drag_count;
+    int slot_count = 0;
+    for (int i = 0; i < INV_SIZE; i++) {
+        if (!seen_inventory[i]) continue;
+        slot_count++;
+        if (inv[i] == *drag_item) total += counts[i];
+    }
+    for (int i = 0; i < CRAFTING_GRID_SIZE; i++) {
+        if (!seen_crafting[i]) continue;
+        slot_count++;
+        if (crafting_items[i] == *drag_item) total += crafting_counts[i];
+    }
+    if (slot_count <= 0) return;
+    int limit = item_stack_limit(*drag_item);
+    int each = total / slot_count;
+    int remainder = total % slot_count;
+    int assigned = 0;
+    int ordinal = 0;
+    for (int i = 0; i < INV_SIZE; i++) {
+        if (!seen_inventory[i]) continue;
+        int amount = each + (ordinal < remainder ? 1 : 0);
+        if (amount > limit) amount = limit;
+        inv[i] = amount > 0 ? *drag_item : 0;
+        counts[i] = amount;
+        assigned += amount;
+        ordinal++;
+    }
+    for (int i = 0; i < CRAFTING_GRID_SIZE; i++) {
+        if (!seen_crafting[i]) continue;
+        int amount = each + (ordinal < remainder ? 1 : 0);
+        if (amount > limit) amount = limit;
+        crafting_items[i] = amount > 0 ? *drag_item : 0;
+        crafting_counts[i] = amount;
+        assigned += amount;
+        ordinal++;
+    }
+    *drag_count = total - assigned;
+    if (*drag_count < 0) *drag_count = 0;
+}
+
+static void move_stack_to_crafting(int* inv, int* counts, int inventory_slot,
+                                   int* crafting_items, int* crafting_counts) {
+    int item = inv[inventory_slot];
+    int amount = counts[inventory_slot];
+    if (!item || amount <= 0) return;
+    for (int i = 0; i < CRAFTING_GRID_SIZE && amount > 0; i++) {
+        if (crafting_items[i] == 0) {
+            crafting_items[i] = item;
+            crafting_counts[i] = amount;
+            amount = 0;
+        } else if (crafting_items[i] == item && !item_get(item)->is_bucket) {
+            int space = item_stack_limit(item) - crafting_counts[i];
+            int moved = amount < space ? amount : space;
+            crafting_counts[i] += moved;
+            amount -= moved;
+        }
+    }
+    counts[inventory_slot] = amount;
+    if (amount == 0) inv[inventory_slot] = 0;
+}
+
+static void consolidate_item_at(int* inv, int* counts,
+                                int* crafting_items, int* crafting_counts,
+                                int inventory_slot, int crafting_slot, int item,
+                                int held_count) {
+    if (item <= 0) return;
+    int total = held_count;
+    if (inventory_slot >= 0) total += counts[inventory_slot];
+    if (crafting_slot >= 0) total += crafting_counts[crafting_slot];
+    for (int i = 0; i < INV_SIZE; i++) {
+        if (i == inventory_slot || inv[i] != item) continue;
+        total += counts[i];
+        inv[i] = 0;
+        counts[i] = 0;
+    }
+    for (int i = 0; i < CRAFTING_GRID_SIZE; i++) {
+        if (i == crafting_slot || crafting_items[i] != item) continue;
+        total += crafting_counts[i];
+        crafting_items[i] = 0;
+        crafting_counts[i] = 0;
+    }
+    if (inventory_slot >= 0) {
+        inv[inventory_slot] = total > 0 ? item : 0;
+        counts[inventory_slot] = total;
+    } else if (crafting_slot >= 0) {
+        crafting_items[crafting_slot] = total > 0 ? item : 0;
+        crafting_counts[crafting_slot] = total;
+    }
 }
 
 static int save_player_position(const char* path, const Camera* cam) {
     FILE* f = fopen(path, "wb");
     if (!f) return 0;
-    size_t written = 0;
-    written += fwrite(&cam->position[0], sizeof(float), 1, f);
-    written += fwrite(&cam->position[1], sizeof(float), 1, f);
-    written += fwrite(&cam->position[2], sizeof(float), 1, f);
+    size_t written = fwrite(cam->position, sizeof(float), 3, f);
     int closed = fclose(f) == 0;
     return written == 3 && closed;
 }
@@ -833,6 +1141,10 @@ menu_start:
 
     Mesh sand_cube_mesh = chunk_mesh_build_block(BLOCK_SAND);
     Mesh gravel_cube_mesh = chunk_mesh_build_block(BLOCK_GRAVEL);
+    Mesh dropped_meshes[ITEM_COUNT] = {0};
+    for (int i = 1; i < ITEM_COUNT; i++)
+        if (!item_defs[i].is_bucket && item_defs[i].block != BLOCK_AIR)
+            dropped_meshes[i] = chunk_mesh_build_block(item_defs[i].block);
 
     //location of textures for blocks
     const char* world_textures[] = {
@@ -890,7 +1202,7 @@ menu_start:
     GLuint item_textures[ITEM_COUNT] = {0};
     for (int i = 1; i < ITEM_COUNT; i++) {
         int hw2, hh2, hch2;
-        unsigned char* hb = stbi_load(item_defs[i].tex_path, &hw2, &hh2, &hch2, 4);
+        unsigned char* hb = stbi_load(item_defs[i].texture_path, &hw2, &hh2, &hch2, 4);
         if (!hb) continue;
         glGenTextures(1, &item_textures[i]);
         glActiveTexture(GL_TEXTURE3);
@@ -904,20 +1216,23 @@ menu_start:
         glBindTexture(GL_TEXTURE_2D, 0);
     }
     int inventory[INV_SIZE] = {0};
+    int inventory_counts[INV_SIZE] = {0};
     int hotbar_items = ITEM_COUNT - 1;
     if (hotbar_items > INV_SIZE - INV_HOTBAR_START) hotbar_items = INV_SIZE - INV_HOTBAR_START;
-    for (int i = 1; i <= hotbar_items; i++) inventory[INV_HOTBAR_START + i - 1] = i;
-    load_inventory(inventory_path, inventory);
-    for (int i = 1; i < ITEM_COUNT; i++) {
-        int present = 0;
-        for (int j = 0; j < INV_SIZE; j++) if (inventory[j] == i) present = 1;
-        if (!present)
-            for (int j = 0; j < INV_SIZE; j++)
-                if (inventory[j] == 0) { inventory[j] = i; break; }
+    for (int i = 1; i <= hotbar_items; i++) {
+        inventory[INV_HOTBAR_START + i - 1] = i;
+        inventory_counts[INV_HOTBAR_START + i - 1] = 1;
     }
+    load_inventory(inventory_path, inventory, inventory_counts);
     int selected_slot = 0;
     int inventory_open = 0;
-    int drag_item = 0, drag_from = -1;
+    int drag_item = 0, drag_count = 0, drag_from = -1;
+    int drag_release_requested = 0;
+    int drag_mouse_down = 0;
+    int drag_seen_inventory[INV_SIZE] = {0};
+    int drag_seen_crafting[CRAFTING_GRID_SIZE] = {0};
+    int crafting_items[CRAFTING_GRID_SIZE] = {0};
+    int crafting_counts[CRAFTING_GRID_SIZE] = {0};
 
     int spawn_wx = 8, spawn_wz = 8, spawn_y = 85;
     {
@@ -1020,8 +1335,44 @@ menu_start:
             if (event.type == SDL_QUIT) running = 0;
             if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_F3)
                 show_fps = !show_fps;
+            if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
+                event.key.keysym.sym == SDLK_q && !paused) {
+                int amount = (SDL_GetModState() & KMOD_CTRL) ? INT_MAX : 1;
+                if (inventory_open) {
+                    int mx = 0, my = 0;
+                    SDL_GetMouseState(&mx, &my);
+                    float drawable_x = 0.0f, drawable_y = 0.0f;
+                    ui_window_to_drawable(window, mx, my, &drawable_x, &drawable_y);
+                    int sw = 0, sh = 0;
+                    SDL_GL_GetDrawableSize(window, &sw, &sh);
+                    InvLayout layout;
+                    inventory_layout(sw, sh, &layout);
+                    int slot = inventory_slot_at(&layout, drawable_x, drawable_y);
+                    if (slot >= 0) {
+                        if (amount == INT_MAX) amount = inventory_counts[slot];
+                        drop_inventory_amount(world, &cam, inventory, inventory_counts, slot, amount);
+                    } else {
+                        int craft_slot = crafting_slot_at(&layout, drawable_x, drawable_y);
+                        if (craft_slot >= 0 && crafting_items[craft_slot] != 0) {
+                            if (amount == INT_MAX) amount = crafting_counts[craft_slot];
+                            world_drop_item(world, crafting_items[craft_slot], amount,
+                                cam.position[0], cam.position[1] + 0.8f, cam.position[2],
+                                cam.orientation[0], cam.orientation[2]);
+                            crafting_counts[craft_slot] -= amount;
+                            if (crafting_counts[craft_slot] <= 0) crafting_items[craft_slot] = 0;
+                        }
+                    }
+                } else {
+                    int slot = INV_HOTBAR_START + selected_slot;
+                    if (amount == INT_MAX) amount = inventory_counts[slot];
+                    drop_inventory_amount(world, &cam, inventory, inventory_counts, slot, amount);
+                }
+            }
             if (event.type == SDL_MOUSEWHEEL && !paused && !inventory_open) {
                 selected_slot = (selected_slot - event.wheel.y % 9 + 9) % 9;
+            }
+            if (event.type == SDL_MOUSEWHEEL && !paused && inventory_open) {
+                palette_scroll -= event.wheel.y;
             }
             if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && !paused && !inventory_open) {
                 SDL_Keycode k = event.key.keysym.sym;
@@ -1034,7 +1385,9 @@ menu_start:
                     mouse_abs_valid = 0;
                     release_relative_mouse(window);
                 } else {
-                    inventory_put_back(inventory, &drag_item, &drag_from);
+                    finish_drag(world, &cam, inventory, inventory_counts, crafting_items, crafting_counts,
+                                &drag_item, &drag_count, &drag_from);
+                    return_crafting_to_inventory(crafting_items, crafting_counts, inventory, inventory_counts);
                     mouse_abs_valid = 0;
                     capture_relative_mouse(window);
                 }
@@ -1042,7 +1395,9 @@ menu_start:
             if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && event.key.keysym.sym == SDLK_ESCAPE) {
                 if (inventory_open) {
                     inventory_open = 0;
-                    inventory_put_back(inventory, &drag_item, &drag_from);
+                    finish_drag(world, &cam, inventory, inventory_counts, crafting_items, crafting_counts,
+                                &drag_item, &drag_count, &drag_from);
+                    return_crafting_to_inventory(crafting_items, crafting_counts, inventory, inventory_counts);
                     mouse_abs_valid = 0;
                     capture_relative_mouse(window);
                 } else {
@@ -1112,34 +1467,141 @@ menu_start:
                 InvLayout inv_layout; inventory_layout(sw, sh, &inv_layout);
                 float mx=0.0f, my=0.0f;
                 ui_window_to_drawable(window, event.button.x, event.button.y, &mx, &my);
+                int palette_item = creative_palette_at(&inv_layout, mx, my);
+                int craft_slot = crafting_slot_at(&inv_layout, mx, my);
                 int slot = inventory_slot_at(&inv_layout, mx, my);
-                if (slot >= 0 && inventory[slot] != 0) {
+                if (event.button.clicks >= 2 && (slot >= 0 || craft_slot >= 0)) {
+                    int item = drag_item;
+                    if (!item && slot >= 0) item = inventory[slot];
+                    if (!item && craft_slot >= 0) item = crafting_items[craft_slot];
+                    consolidate_item_at(inventory, inventory_counts, crafting_items, crafting_counts,
+                                        slot, craft_slot, item, drag_item ? drag_count : 0);
+                    drag_item = 0;
+                    drag_count = 0;
+                    drag_from = -1;
+                    drag_mouse_down = 0;
+                    drag_release_requested = 0;
+                } else if (drag_item) {
+                    drag_mouse_down = 1;
+                    drag_release_requested = 1;
+                } else if (crafting_result_at(&inv_layout, mx, my)) {
+                    craft_one(crafting_items, crafting_counts, inventory, inventory_counts);
+                } else if (palette_item) {
+                    int palette_amount = (SDL_GetModState() & KMOD_CTRL) ?
+                        item_stack_limit(palette_item) : 1;
+                    inventory_add(inventory, inventory_counts, palette_item, palette_amount);
+                } else if (craft_slot >= 0 && crafting_items[craft_slot] != 0) {
+                    memset(drag_seen_inventory, 0, sizeof(drag_seen_inventory));
+                    memset(drag_seen_crafting, 0, sizeof(drag_seen_crafting));
+                    drag_item = crafting_items[craft_slot];
+                    drag_count = crafting_counts[craft_slot];
+                    drag_from = -2 - craft_slot;
+                    drag_mouse_down = 1;
+                    crafting_items[craft_slot] = 0;
+                    crafting_counts[craft_slot] = 0;
+                } else if (slot >= 0 && inventory[slot] != 0) {
                     if (SDL_GetModState() & KMOD_SHIFT) {
-                        inventory_shift_click(inventory, slot);
+                        move_stack_to_crafting(inventory, inventory_counts, slot,
+                                               crafting_items, crafting_counts);
+                    } else if (SDL_GetModState() & KMOD_CTRL) {
+                        inventory_shift_click(inventory, inventory_counts, slot);
                     } else {
+                        memset(drag_seen_inventory, 0, sizeof(drag_seen_inventory));
+                        memset(drag_seen_crafting, 0, sizeof(drag_seen_crafting));
                         drag_item = inventory[slot];
+                        drag_count = inventory_counts[slot];
                         drag_from = slot;
+                        drag_mouse_down = 1;
                         inventory[slot] = 0;
+                        inventory_counts[slot] = 0;
                     }
                 }
             } else if (!paused && inventory_open && event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
-                if (drag_item) {
+                if (drag_item && drag_release_requested) {
+                    drag_release_requested = 0;
+                    if (drag_count <= 0) {
+                        drag_item = 0;
+                        drag_mouse_down = 0;
+                        drag_from = -1;
+                        continue;
+                    }
                     int sw=0, sh=0; SDL_GL_GetDrawableSize(window, &sw, &sh);
                     InvLayout inv_layout; inventory_layout(sw, sh, &inv_layout);
                     float mx=0.0f, my=0.0f;
                     ui_window_to_drawable(window, event.button.x, event.button.y, &mx, &my);
+                    int craft_slot = crafting_slot_at(&inv_layout, mx, my);
                     int slot = inventory_slot_at(&inv_layout, mx, my);
-                    if (slot >= 0) {
-                        if (inventory[slot] != 0 && drag_from >= 0)
-                            inventory[drag_from] = inventory[slot];
-                        inventory[slot] = drag_item;
-                        drag_item = 0;
-                        drag_from = -1;
+                    int palette_item = creative_palette_at(&inv_layout, mx, my);
+                    int over_result = crafting_result_at(&inv_layout, mx, my);
+                    if (craft_slot >= 0) {
+                        if (crafting_items[craft_slot] == 0) {
+                            crafting_items[craft_slot] = drag_item;
+                            crafting_counts[craft_slot] = drag_count;
+                            drag_item = 0; drag_count = 0; drag_from = -1;
+                        } else if (crafting_items[craft_slot] == drag_item && !item_get(drag_item)->is_bucket) {
+                            int space = item_stack_limit(drag_item) - crafting_counts[craft_slot];
+                            int moved = drag_count < space ? drag_count : space;
+                            crafting_counts[craft_slot] += moved;
+                            drag_count -= moved;
+                            if (drag_count <= 0) {
+                                drag_item = 0; drag_count = 0; drag_from = -1;
+                            } else {
+                                finish_drag(world, &cam, inventory, inventory_counts,
+                                            crafting_items, crafting_counts,
+                                            &drag_item, &drag_count, &drag_from);
+                            }
+                        } else {
+                            finish_drag(world, &cam, inventory, inventory_counts,
+                                        crafting_items, crafting_counts,
+                                        &drag_item, &drag_count, &drag_from);
+                        }
+                    } else if (slot >= 0) {
+                        if (inventory[slot] == 0) {
+                            inventory[slot] = drag_item;
+                            inventory_counts[slot] = drag_count;
+                            drag_item = 0; drag_count = 0; drag_from = -1;
+                        } else if (inventory[slot] == drag_item && !item_get(drag_item)->is_bucket) {
+                            int limit = item_stack_limit(drag_item);
+                            int space = limit - inventory_counts[slot];
+                            int moved = drag_count < space ? drag_count : space;
+                            inventory_counts[slot] += moved;
+                            drag_count -= moved;
+                            if (drag_count <= 0) {
+                                drag_item = 0; drag_count = 0; drag_from = -1;
+                            } else {
+                                inventory_put_back(inventory, inventory_counts, &drag_item, &drag_count, &drag_from);
+                            }
+                        } else if (drag_from >= 0) {
+                            int old_item = inventory[slot];
+                            int old_count = inventory_counts[slot];
+                            inventory[slot] = drag_item;
+                            inventory_counts[slot] = drag_count;
+                            inventory[drag_from] = old_item;
+                            inventory_counts[drag_from] = old_count;
+                            drag_item = 0;
+                            drag_count = 0;
+                            drag_from = -1;
+                        } else {
+                            inventory_put_back(inventory, inventory_counts, &drag_item, &drag_count, &drag_from);
+                        }
+                    } else if (craft_slot < 0 && slot < 0 && !palette_item && !over_result) {
+                        world_drop_item(world, drag_item, drag_count,
+                            cam.position[0], cam.position[1] + 0.8f, cam.position[2],
+                            cam.orientation[0], cam.orientation[2]);
+                        drag_item = 0; drag_count = 0; drag_from = -1;
                     } else {
                         for (int i = 0; i < INV_MAIN_COUNT && drag_item; i++)
-                            if (inventory[i] == 0) { inventory[i] = drag_item; drag_item = 0; drag_from = -1; }
-                        inventory_put_back(inventory, &drag_item, &drag_from);
+                            if (inventory[i] == 0) {
+                                inventory[i] = drag_item;
+                                inventory_counts[i] = drag_count;
+                                drag_item = 0;
+                                drag_count = 0;
+                                drag_from = -1;
+                            }
+                        inventory_put_back(inventory, inventory_counts, &drag_item, &drag_count, &drag_from);
                     }
+                } else {
+                    drag_mouse_down = 0;
                 }
             } else if (!paused && !inventory_open && event.type == SDL_MOUSEBUTTONDOWN) {
                 if (event.button.button == SDL_BUTTON_LEFT)       break_requested=1;
@@ -1163,6 +1625,17 @@ menu_start:
                     mouse_abs_last_y = my;
                     mouse_abs_valid = 1;
                 }
+            }
+            if (!paused && inventory_open && drag_item && drag_mouse_down && event.type == SDL_MOUSEMOTION) {
+                int sw = 0, sh = 0;
+                SDL_GL_GetDrawableSize(window, &sw, &sh);
+                InvLayout layout;
+                inventory_layout(sw, sh, &layout);
+                float mx = 0.0f, my = 0.0f;
+                ui_window_to_drawable(window, event.motion.x, event.motion.y, &mx, &my);
+                distribute_drag_at(&layout, mx, my, inventory, inventory_counts,
+                                   crafting_items, crafting_counts, &drag_item, &drag_count, &drag_from,
+                                   drag_seen_inventory, drag_seen_crafting);
             }
 
             if (event.type == SDL_WINDOWEVENT) {
@@ -1285,6 +1758,24 @@ menu_start:
 
         if (!paused) world_update_water(world, dt);
         if (!paused) world_update_gravity(world, dt);
+        if (!paused) {
+            world_update_dropped_items(world, dt);
+            for (int i = 0; i < world->dropped_count; ) {
+                DroppedItem* drop = &world->dropped[i];
+                float dx = drop->x - cam.position[0];
+                float dy = drop->y - cam.position[1];
+                float dz = drop->z - cam.position[2];
+                if (drop->pickup_delay <= 0.0f && dx * dx + dy * dy + dz * dz <= 2.25f) {
+                    int remaining = inventory_add_pickup(inventory, inventory_counts, drop->item, drop->count);
+                    if (remaining == 0) {
+                        world->dropped[i] = world->dropped[--world->dropped_count];
+                        continue;
+                    }
+                    drop->count = remaining;
+                }
+                i++;
+            }
+        }
 
         fps_count++;
         fps_timer += dt;
@@ -1422,8 +1913,17 @@ menu_start:
             raycast_block_selection(world, cam.position, cam.orientation, reach_distance, &sel, 0);
             const ItemDef* held_item = &item_defs[inventory[INV_HOTBAR_START + selected_slot]];
 
+            /* Survival mining drops belong behind this switch. Creative mode
+             * still removes blocks, but does not create item entities. */
             if (break_requested && sel.hit) {
-                if (world_set_block(world, sel.block_x, sel.block_y, sel.block_z, BLOCK_AIR)) {
+                Block* broken = world_get_block(world, sel.block_x, sel.block_y, sel.block_z);
+                int dropped_item = broken ? item_for_block(broken->type) : 0;
+                if (broken && item_hardness_for_block(broken->type) <= 1 &&
+                    world_set_block(world, sel.block_x, sel.block_y, sel.block_z, BLOCK_AIR)) {
+                    if (SURVIVAL_MODE)
+                        world_drop_item(world, dropped_item, 1,
+                            (float)sel.block_x + 0.5f, (float)sel.block_y + 0.65f,
+                            (float)sel.block_z + 0.5f, cam.orientation[0], cam.orientation[2]);
                     sel.hit=0; raycast_block_selection(world, cam.position, cam.orientation, reach_distance, &sel, 0);
                 }
             }
@@ -1517,6 +2017,20 @@ menu_start:
                 mesh_draw(f->type == BLOCK_GRAVEL ? &gravel_cube_mesh : &sand_cube_mesh);
             }
 
+            for (int i = 0; i < world->dropped_count; i++) {
+                DroppedItem* drop = &world->dropped[i];
+                if (drop->item <= 0 || drop->item >= ITEM_COUNT ||
+                    dropped_meshes[drop->item].index_count == 0 ||
+                    block_transparent(item_defs[drop->item].block)) continue;
+                mat4 drop_model; glm_mat4_identity(drop_model);
+                vec3 drop_pos = {drop->x - 0.18f, drop->y - 0.18f, drop->z - 0.18f};
+                glm_translate(drop_model, drop_pos);
+                glm_rotate(drop_model, drop->yaw, (vec3){0.0f, 1.0f, 0.0f});
+                glm_scale_uni(drop_model, 0.36f);
+                glUniformMatrix4fv(u_model, 1, GL_FALSE, (float*)drop_model);
+                mesh_draw(&dropped_meshes[drop->item]);
+            }
+
             glUseProgram(cutoutProgram);
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1534,6 +2048,19 @@ menu_start:
                 glm_translate(chunk_model, chunk_offset);
                 glUniformMatrix4fv(u_cut_model, 1, GL_FALSE, (float*)chunk_model);
                 mesh_draw(&s->cutout_mesh);
+            }
+            for (int i = 0; i < world->dropped_count; i++) {
+                DroppedItem* drop = &world->dropped[i];
+                if (drop->item <= 0 || drop->item >= ITEM_COUNT ||
+                    dropped_meshes[drop->item].index_count == 0 ||
+                    !block_transparent(item_defs[drop->item].block)) continue;
+                mat4 drop_model; glm_mat4_identity(drop_model);
+                vec3 drop_pos = {drop->x - 0.18f, drop->y - 0.18f, drop->z - 0.18f};
+                glm_translate(drop_model, drop_pos);
+                glm_rotate(drop_model, drop->yaw, (vec3){0.0f, 1.0f, 0.0f});
+                glm_scale_uni(drop_model, 0.36f);
+                glUniformMatrix4fv(u_cut_model, 1, GL_FALSE, (float*)drop_model);
+                mesh_draw(&dropped_meshes[drop->item]);
             }
             glDisable(GL_BLEND);
             glUseProgram(shaderProgram);
@@ -1716,6 +2243,12 @@ menu_start:
                     glDrawArrays(GL_TRIANGLES, 0, 6);
                     glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
                 }
+                for (int si = 0; si < 9; si++) {
+                    float sx2 = hx + si * (slot_size + pad);
+                    draw_stack_count(uiProgram, uiVAO, uiVBO, u_ui_screenSize, u_ui_color,
+                                     screen_w, screen_h, sx2, hy, slot_size,
+                                     inventory_counts[INV_HOTBAR_START + si]);
+                }
                 glDisable(GL_BLEND); glEnable(GL_CULL_FACE); glEnable(GL_DEPTH_TEST);
             }
 
@@ -1736,8 +2269,12 @@ menu_start:
                 glDrawArrays(GL_TRIANGLES, 0, 6);
 
                 rc = 0;
-                append_rect(rect, &rc, inv_layout.x - panel_pad, inv_layout.y - panel_pad,
-                            grid_w + 2.0f*panel_pad, grid_h + 2.0f*panel_pad);
+                append_rect(rect, &rc, inv_layout.palette_x - panel_pad, inv_layout.craft_y - panel_pad,
+                            2.0f * inv_layout.cell + inv_layout.pad + 2.0f * panel_pad,
+                            inv_layout.y + grid_h - inv_layout.craft_y + 2.0f * panel_pad);
+                append_rect(rect, &rc, inv_layout.craft_x - panel_pad, inv_layout.craft_y - panel_pad,
+                            grid_w + 2.0f * panel_pad,
+                            inv_layout.y + grid_h - inv_layout.craft_y + 2.0f * panel_pad);
                 glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*rc, rect);
                 glUniform4f(u_ui_color, 0.12f, 0.12f, 0.12f, 0.92f);
                 glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -1748,6 +2285,43 @@ menu_start:
                     inventory_slot_rect(&inv_layout, i, &rx, &ry);
                     rc = 0;
                     append_rect(rect, &rc, rx, ry, inv_layout.cell, inv_layout.cell);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*rc, rect);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                }
+                for (int i = 0; i < CRAFTING_GRID_SIZE; i++) {
+                    float rx, ry;
+                    crafting_slot_rect(&inv_layout, i, &rx, &ry);
+                    rc = 0; append_rect(rect, &rc, rx, ry, inv_layout.cell, inv_layout.cell);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*rc, rect);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                }
+                {
+                    float rx = inv_layout.output_x;
+                    float ry = inv_layout.output_y;
+                    rc = 0; append_rect(rect, &rc, rx, ry, inv_layout.cell, inv_layout.cell);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*rc, rect);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                    float arrow[36];
+                    int arrow_count = 0;
+                    append_rect(arrow, &arrow_count, inv_layout.craft_x + 2.0f * (inv_layout.cell + inv_layout.pad),
+                                inv_layout.output_y + inv_layout.cell * 0.46f,
+                                inv_layout.output_x - inv_layout.craft_x - 2.0f * (inv_layout.cell + inv_layout.pad),
+                                inv_layout.cell * 0.08f);
+                    append_rect(arrow, &arrow_count, inv_layout.output_x - inv_layout.cell * 0.22f,
+                                inv_layout.output_y + inv_layout.cell * 0.22f,
+                                inv_layout.cell * 0.22f, inv_layout.cell * 0.08f);
+                    append_rect(arrow, &arrow_count, inv_layout.output_x - inv_layout.cell * 0.22f,
+                                inv_layout.output_y + inv_layout.cell * 0.70f,
+                                inv_layout.cell * 0.22f, inv_layout.cell * 0.08f);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*arrow_count, arrow);
+                    glDrawArrays(GL_TRIANGLES, 0, arrow_count / 2);
+                }
+                for (int i = 1; i < ITEM_COUNT; i++) {
+                    float rx, ry;
+                    creative_palette_rect(&inv_layout, i, &rx, &ry);
+                    float hotbar_bottom = inv_layout.y + 3.0f * (inv_layout.cell + inv_layout.pad) + inv_layout.gap + inv_layout.cell;
+                    if (ry < inv_layout.palette_y || ry + inv_layout.cell > hotbar_bottom) continue;
+                    rc = 0; append_rect(rect, &rc, rx, ry, inv_layout.cell, inv_layout.cell);
                     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*rc, rect);
                     glDrawArrays(GL_TRIANGLES, 0, 6);
                 }
@@ -1777,7 +2351,66 @@ menu_start:
                     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(iv), iv);
                     glDrawArrays(GL_TRIANGLES, 0, 6);
                 }
-                if (drag_item && item_textures[drag_item]) {
+                for (int i = 0; i < CRAFTING_GRID_SIZE; i++) {
+                    GLuint itex = item_textures[crafting_items[i]];
+                    if (!itex) continue;
+                    float rx, ry; crafting_slot_rect(&inv_layout, i, &rx, &ry);
+                    float ox = rx + (inv_layout.cell - inner) * 0.5f;
+                    float oy = ry + (inv_layout.cell - inner) * 0.5f;
+                    float iv[24] = {ox,oy,0,0, ox+inner,oy,1,0, ox+inner,oy+inner,1,1,
+                                    ox,oy,0,0, ox+inner,oy+inner,1,1, ox,oy+inner,0,1};
+                    glBindTexture(GL_TEXTURE_2D, itex);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(iv), iv);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                }
+                int recipe_index = item_find_recipe(crafting_items, crafting_counts, CRAFTING_GRID_SIZE);
+                if (recipe_index >= 0) {
+                    int result_item = item_recipes[recipe_index].result_item;
+                    GLuint itex = item_textures[result_item];
+                    if (itex) {
+                        float rx = inv_layout.output_x;
+                        float ry = inv_layout.output_y;
+                        float ox = rx + (inv_layout.cell - inner) * 0.5f;
+                        float oy = ry + (inv_layout.cell - inner) * 0.5f;
+                        float iv[24] = {ox,oy,0,0, ox+inner,oy,1,0, ox+inner,oy+inner,1,1,
+                                        ox,oy,0,0, ox+inner,oy+inner,1,1, ox,oy+inner,0,1};
+                        glBindTexture(GL_TEXTURE_2D, itex);
+                        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(iv), iv);
+                        glDrawArrays(GL_TRIANGLES, 0, 6);
+                    }
+                }
+                for (int i = 1; i < ITEM_COUNT; i++) {
+                    GLuint itex = item_textures[i];
+                    if (!itex) continue;
+                    float rx, ry; creative_palette_rect(&inv_layout, i, &rx, &ry);
+                    float hotbar_bottom = inv_layout.y + 3.0f * (inv_layout.cell + inv_layout.pad) + inv_layout.gap + inv_layout.cell;
+                    if (ry < inv_layout.palette_y || ry + inv_layout.cell > hotbar_bottom) continue;
+                    float ox = rx + (inv_layout.cell - inner) * 0.5f;
+                    float oy = ry + (inv_layout.cell - inner) * 0.5f;
+                    float iv[24] = {ox,oy,0,0, ox+inner,oy,1,0, ox+inner,oy+inner,1,1,
+                                    ox,oy,0,0, ox+inner,oy+inner,1,1, ox,oy+inner,0,1};
+                    glBindTexture(GL_TEXTURE_2D, itex);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(iv), iv);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                }
+                for (int i = 0; i < INV_SIZE; i++) {
+                    float rx, ry;
+                    inventory_slot_rect(&inv_layout, i, &rx, &ry);
+                    draw_stack_count(uiProgram, uiVAO, uiVBO, u_ui_screenSize, u_ui_color,
+                                     screen_w, screen_h, rx, ry, inv_layout.cell, inventory_counts[i]);
+                }
+                for (int i = 0; i < CRAFTING_GRID_SIZE; i++) {
+                    float rx, ry;
+                    crafting_slot_rect(&inv_layout, i, &rx, &ry);
+                    draw_stack_count(uiProgram, uiVAO, uiVBO, u_ui_screenSize, u_ui_color,
+                                     screen_w, screen_h, rx, ry, inv_layout.cell, crafting_counts[i]);
+                }
+                if (recipe_index >= 0) {
+                    draw_stack_count(uiProgram, uiVAO, uiVBO, u_ui_screenSize, u_ui_color,
+                                     screen_w, screen_h, inv_layout.output_x, inv_layout.output_y,
+                                     inv_layout.cell, item_recipes[recipe_index].result_count);
+                }
+                if (drag_item && drag_count > 0 && item_textures[drag_item]) {
                     int mwx = 0, mwy = 0;
                     SDL_GetMouseState(&mwx, &mwy);
                     float mx = 0.0f, my = 0.0f;
@@ -1792,9 +2425,18 @@ menu_start:
                         ox+inner, oy+inner, 1,1,
                         ox,       oy+inner, 0,1,
                     };
+                    glUseProgram(buttonProgram);
+                    glBindVertexArray(buttonVAO);
+                    glBindBuffer(GL_ARRAY_BUFFER, buttonVBO);
+                    glUniform2f(u_btn_screenSize, (float)screen_w, (float)screen_h);
+                    glActiveTexture(GL_TEXTURE3);
+                    glUniform1i(u_btn_tex, 3);
                     glBindTexture(GL_TEXTURE_2D, item_textures[drag_item]);
                     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(iv), iv);
                     glDrawArrays(GL_TRIANGLES, 0, 6);
+                    draw_stack_count(uiProgram, uiVAO, uiVBO, u_ui_screenSize, u_ui_color,
+                                     screen_w, screen_h, mx - inner * 0.5f, my - inner * 0.5f,
+                                     inner, drag_count);
                 }
                 glBindTexture(GL_TEXTURE_2D, 0);
                 glBindBuffer(GL_ARRAY_BUFFER, 0); glBindVertexArray(0);
@@ -2012,7 +2654,7 @@ menu_start:
         if (autosave_timer >= 60.0f) {
             autosave_timer -= 60.0f;
             int save_ok = save_player_position(player_path, &cam);
-            save_ok = save_inventory(inventory_path, inventory) && save_ok;
+            save_ok = save_inventory(inventory_path, inventory, inventory_counts) && save_ok;
             save_ok = save_world_time(world_time_path, day_time) && save_ok;
             save_ok = world_save_all_dirty(world) && save_ok;
             save_status = save_ok ? 1 : 2;
@@ -2034,14 +2676,18 @@ menu_start:
     settings.day_time = day_time;
     settings.anti_aliasing = anti_aliasing;
     save_settings("Savefiles/settings.cfg", &settings);
-    inventory_put_back(inventory, &drag_item, &drag_from);
-    save_inventory(inventory_path, inventory);
+    return_crafting_to_inventory(crafting_items, crafting_counts, inventory, inventory_counts);
+    finish_drag(world, &cam, inventory, inventory_counts, crafting_items, crafting_counts,
+                &drag_item, &drag_count, &drag_from);
+    save_inventory(inventory_path, inventory, inventory_counts);
     save_world_time(world_time_path, day_time);
 
     world_save_all_dirty(world);
     world_free(world);
     mesh_delete(&sand_cube_mesh);
     mesh_delete(&gravel_cube_mesh);
+    for (int i = 1; i < ITEM_COUNT; i++)
+        if (dropped_meshes[i].index_count != 0) mesh_delete(&dropped_meshes[i]);
     if (msaa_fbo) {
         glDeleteFramebuffers(1, &msaa_fbo);
         glDeleteRenderbuffers(1, &msaa_color_rbo);

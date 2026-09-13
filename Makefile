@@ -8,6 +8,7 @@ SRCS = src/main.c \
        src/stb.c \
        src/Camera/Camera.c \
        src/World/chunk.c \
+       src/World/items.c \
        src/World/world.c \
        src/World/chunk_mesh.c \
        src/World/menu.c

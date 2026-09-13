@@ -25,6 +25,16 @@ typedef struct { int x, y, z; } WaterPos;
 typedef struct { int x, y, z; } FallPos;
 
 typedef struct {
+    int item;
+    int count;
+    float x, y, z;
+    float vx, vy, vz;
+    float yaw;
+    float age;
+    float pickup_delay;
+} DroppedItem;
+
+typedef struct {
     int ix, iz;
     int y0;
     float y;
@@ -59,6 +69,9 @@ typedef struct {
     FallingBlock* falling;
     int falling_count;
     int falling_cap;
+    DroppedItem* dropped;
+    int dropped_count;
+    int dropped_cap;
 } World;
 
 void world_init(World* world, int center_cx, int center_cz, const char* save_dir, uint32_t seed, int natural);
@@ -79,6 +92,11 @@ void world_update_water(World* world, float dt);
 
 void world_schedule_gravity(World* world, int wx, int wy, int wz);
 void world_update_gravity(World* world, float dt);
+
+void world_drop_item(World* world, int item, int count, float x, float y, float z,
+                     float direction_x, float direction_z);
+void world_update_dropped_items(World* world, float dt);
+int  world_save_dropped_items(World* world);
 
 void world_rebuild_mesh(World* world, int cx, int cz);
 int  world_save_chunk(World* world, int cx, int cz);
