@@ -600,35 +600,6 @@ static void move_stack_to_crafting(int* inv, int* counts, int inventory_slot,
     if (amount == 0) inv[inventory_slot] = 0;
 }
 
-static void consolidate_item_at(int* inv, int* counts,
-                                int* crafting_items, int* crafting_counts,
-                                int inventory_slot, int crafting_slot, int item,
-                                int held_count) {
-    if (item <= 0) return;
-    int total = held_count;
-    if (inventory_slot >= 0) total += counts[inventory_slot];
-    if (crafting_slot >= 0) total += crafting_counts[crafting_slot];
-    for (int i = 0; i < INV_SIZE; i++) {
-        if (i == inventory_slot || inv[i] != item) continue;
-        total += counts[i];
-        inv[i] = 0;
-        counts[i] = 0;
-    }
-    for (int i = 0; i < CRAFTING_GRID_SIZE; i++) {
-        if (i == crafting_slot || crafting_items[i] != item) continue;
-        total += crafting_counts[i];
-        crafting_items[i] = 0;
-        crafting_counts[i] = 0;
-    }
-    if (inventory_slot >= 0) {
-        inv[inventory_slot] = total > 0 ? item : 0;
-        counts[inventory_slot] = total;
-    } else if (crafting_slot >= 0) {
-        crafting_items[crafting_slot] = total > 0 ? item : 0;
-        crafting_counts[crafting_slot] = total;
-    }
-}
-
 static int save_player_position(const char* path, const Camera* cam) {
     FILE* f = fopen(path, "wb");
     if (!f) return 0;
@@ -1470,18 +1441,7 @@ menu_start:
                 int palette_item = creative_palette_at(&inv_layout, mx, my);
                 int craft_slot = crafting_slot_at(&inv_layout, mx, my);
                 int slot = inventory_slot_at(&inv_layout, mx, my);
-                if (event.button.clicks >= 2 && (slot >= 0 || craft_slot >= 0)) {
-                    int item = drag_item;
-                    if (!item && slot >= 0) item = inventory[slot];
-                    if (!item && craft_slot >= 0) item = crafting_items[craft_slot];
-                    consolidate_item_at(inventory, inventory_counts, crafting_items, crafting_counts,
-                                        slot, craft_slot, item, drag_item ? drag_count : 0);
-                    drag_item = 0;
-                    drag_count = 0;
-                    drag_from = -1;
-                    drag_mouse_down = 0;
-                    drag_release_requested = 0;
-                } else if (drag_item) {
+                if (drag_item) {
                     drag_mouse_down = 1;
                     drag_release_requested = 1;
                 } else if (crafting_result_at(&inv_layout, mx, my)) {
@@ -2269,13 +2229,25 @@ menu_start:
                 glDrawArrays(GL_TRIANGLES, 0, 6);
 
                 rc = 0;
-                append_rect(rect, &rc, inv_layout.palette_x - panel_pad, inv_layout.craft_y - panel_pad,
-                            2.0f * inv_layout.cell + inv_layout.pad + 2.0f * panel_pad,
-                            inv_layout.y + grid_h - inv_layout.craft_y + 2.0f * panel_pad);
-                append_rect(rect, &rc, inv_layout.craft_x - panel_pad, inv_layout.craft_y - panel_pad,
+                append_rect(rect, &rc,
+                            inv_layout.x - panel_pad,
+                            inv_layout.y - panel_pad,
                             grid_w + 2.0f * panel_pad,
+                            grid_h + 2.0f * panel_pad);
+
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * rc, rect);
+                glUniform4f(u_ui_color, 0.12f, 0.12f, 0.12f, 0.92f);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+
+                /* Creative inventory background */
+                rc = 0;
+                append_rect(rect, &rc,
+                            inv_layout.palette_x - panel_pad,
+                            inv_layout.craft_y - panel_pad,
+                            inv_layout.x + grid_w - inv_layout.palette_x + 2.0f * panel_pad,
                             inv_layout.y + grid_h - inv_layout.craft_y + 2.0f * panel_pad);
-                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float)*rc, rect);
+
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * rc, rect);
                 glUniform4f(u_ui_color, 0.12f, 0.12f, 0.12f, 0.92f);
                 glDrawArrays(GL_TRIANGLES, 0, 6);
 
